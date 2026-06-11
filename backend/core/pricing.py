@@ -19,6 +19,7 @@ def pricing_scenarios(quality: dict, profile: dict, calibration: dict | None = N
     legal_adjustment = 0.0
     legal_reasons: list[str] = []
     if legal_risk:
+        strategy_impacts = legal_risk.get("strategy_impacts", {})
         if legal_risk.get("overall_risk") == "high":
             legal_adjustment = -0.01
             legal_reasons.append("合同/文书整体风险为高，报价区间小幅下修。")
@@ -27,6 +28,12 @@ def pricing_scenarios(quality: dict, profile: dict, calibration: dict | None = N
             legal_reasons.append("合同/文书整体风险为中，报价区间谨慎下修。")
         else:
             legal_reasons.append("合同/文书风险线索相对可控，报价不做额外下修。")
+        if strategy_impacts.get("pricing_direction") == "down":
+            legal_adjustment -= 0.005
+            legal_reasons.append("文书策略影响提示下修，例如终本、无财产或核心请求风险。")
+        elif strategy_impacts.get("pricing_direction") == "up_with_review" and legal_risk.get("confidence") != "low":
+            legal_adjustment += 0.003
+            legal_reasons.append("识别到判决/执行等确认债权线索，报价可信度可小幅上调但需人工复核。")
         if legal_risk.get("confidence") == "low":
             legal_reasons.append("合同文本质量或识别可信度偏低，法律风险修正仅作提示。")
     modifier += legal_adjustment

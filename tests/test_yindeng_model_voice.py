@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import shutil
 import tempfile
 import threading
@@ -110,6 +111,22 @@ class NextStageTests(unittest.TestCase):
         self.assertIn("湖南", parsed.regions)
         self.assertIn("announcement_date", parsed.dates)
         self.assertIn(parsed.confidence, {"medium", "high"})
+        self.assertIn("field_sources", parsed.parsed)
+        self.assertIn("principal", parsed.parsed["field_sources"])
+
+    def test_document_parser_status_and_inspect_html_notice(self):
+        status = self.get("/api/settings/document-parser")
+        self.assertTrue(status["ok"])
+        self.assertIn(".pdf", status["supported_formats"])
+        raw = "<html><body>银登中心个人不良贷款转让公告 本金 100 万元 <a href='a.pdf'>附件</a></body></html>"
+        inspected = self.post(
+            "/api/documents/inspect",
+            {"filename": "公告.html", "content_base64": base64.b64encode(raw.encode("utf-8")).decode("ascii")},
+        )
+        self.assertTrue(inspected["ok"])
+        self.assertEqual(inspected["document"]["file_type"], "html")
+        self.assertEqual(inspected["document"]["extraction_method"], "html_text")
+        self.assertEqual(inspected["document"]["attachments"][0]["url"], "a.pdf")
 
     def test_yindeng_parse_api_can_create_project(self):
         parsed = self.post("/api/intelligence/yindeng/parse", {"text": NOTICE_TEXT, "source_type": "manual_text"})
@@ -135,6 +152,21 @@ class NextStageTests(unittest.TestCase):
         alerts = self.get("/api/intelligence/yindeng/alerts")
         self.assertGreaterEqual(len(alerts["alerts"]), 1)
         self.assertIn("广东", [item["keyword"] for item in alerts["alerts"]])
+
+    def test_yindeng_parse_accepts_uploaded_html_notice(self):
+        raw = "中国东方资产管理股份有限公司个人不良贷款资产包公告，债务人 8 户，债权本金 320 万元，地区广东。"
+        parsed = self.post(
+            "/api/intelligence/yindeng/parse",
+            {
+                "filename": "银登公告.html",
+                "content_base64": base64.b64encode(raw.encode("utf-8")).decode("ascii"),
+                "source_type": "manual_file",
+            },
+        )
+        self.assertTrue(parsed["ok"])
+        self.assertEqual(parsed["notice"]["debtor_count"], 8)
+        self.assertAlmostEqual(parsed["notice"]["principal"] or 0, 3200000)
+        self.assertIn("field_sources", parsed["notice"]["parsed"])
 
     def test_model_gateway_redacts_sensitive_prompt_and_hides_key(self):
         saved = self.post(

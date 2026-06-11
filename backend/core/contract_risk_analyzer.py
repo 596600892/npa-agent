@@ -25,7 +25,7 @@ def analyze_contract_risk(text: str, metadata: dict | None = None) -> dict:
     overall = _overall_risk(sections)
     confidence = _confidence(clean_text, sections, metadata)
     return {
-        "analyzer_version": "contract_risk_analyzer_v0.2",
+        "analyzer_version": "contract_risk_analyzer_v0.3",
         "document_type": document_type,
         "overall_risk": overall,
         "confidence": confidence,
@@ -34,6 +34,13 @@ def analyze_contract_risk(text: str, metadata: dict | None = None) -> dict:
         "filename": metadata.get("filename"),
         "parser_version": metadata.get("parser_version"),
         "warnings": metadata.get("warnings", []),
+        "is_scanned_pdf": bool(metadata.get("is_scanned_pdf")),
+        "extraction_method": metadata.get("extraction_method", "unknown"),
+        "pages_used": metadata.get("pages_used", []),
+        "ocr_status": metadata.get("ocr_status", "not_needed"),
+        "ocr_confidence": metadata.get("ocr_confidence"),
+        "attachments": metadata.get("attachments", []),
+        "field_sources": metadata.get("field_sources", {}),
         "extracted": {
             "jurisdiction_courts": sections["jurisdiction"].get("courts", []),
             "arbitration_bodies": sections["jurisdiction"].get("arbitration_bodies", []),
@@ -44,6 +51,8 @@ def analyze_contract_risk(text: str, metadata: dict | None = None) -> dict:
             "legal_amounts": judicial_analysis.get("amounts", []) if judicial_analysis else [],
         },
         "judicial_analysis": judicial_analysis,
+        "judicial_document_analysis": judicial_analysis,
+        "strategy_impacts": _strategy_impacts(overall, confidence, document_type, judicial_analysis, metadata),
         "risks": sections,
         "next_actions": _next_actions(sections, metadata, document_type, judicial_analysis),
     }
@@ -322,6 +331,39 @@ def _judicial_evidence_suggestions(document_type: str, adjudication_points: list
         if not mediation_terms:
             suggestions.append("核对调解金额、分期安排和违约后恢复执行路径。")
     return suggestions[:4]
+
+
+def _strategy_impacts(overall: str, confidence: str, document_type: str, judicial_analysis: dict | None, metadata: dict) -> dict:
+    impacts: list[str] = []
+    execution_route = None
+    pricing_direction = "neutral"
+    if metadata.get("ocr_status") == "success":
+        impacts.append("文书来自本地 OCR，关键金额、法院和日期需要人工抽样核对。")
+    if confidence == "low":
+        impacts.append("文本质量或识别可信度偏低，暂不建议据此大幅调整报价。")
+    if document_type == "judgment" and judicial_analysis and judicial_analysis.get("adjudication_points"):
+        pricing_direction = "up_with_review"
+        execution_route = "litigation_or_enforcement_review"
+        impacts.append("识别到判决主文线索，可提高债权确认程度判断，但需核对生效证明。")
+    if document_type == "enforcement" and judicial_analysis:
+        statuses = " ".join(judicial_analysis.get("execution_statuses", []))
+        execution_route = "enforcement_recovery_or_asset_trace"
+        if "终结本次执行" in statuses or "未发现可供执行财产" in statuses:
+            pricing_direction = "down"
+            impacts.append("识别到终本或无财产线索，报价和执行预期应谨慎下修。")
+        else:
+            impacts.append("识别到执行文书线索，建议进入恢复执行或财产线索补强。")
+    if document_type == "mediation" and judicial_analysis and judicial_analysis.get("mediation_terms"):
+        execution_route = "mediation_performance_check"
+        impacts.append("识别到调解履行条款，建议优先核实履约期限、付款记录和违约后路径。")
+    if overall == "high" and pricing_direction == "neutral":
+        pricing_direction = "down"
+        impacts.append("合同/文书整体风险较高，报价区间应谨慎。")
+    return {
+        "pricing_direction": pricing_direction,
+        "execution_route": execution_route,
+        "impacts": impacts or ["暂未识别足以改变处置策略的文书线索。"],
+    }
 
 
 def _overall_risk(sections: dict[str, dict]) -> str:

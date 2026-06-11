@@ -162,8 +162,20 @@ def write_report(
         lines.append("")
         lines.append(f"来源文件：{legal_risk.get('filename') or '合同/文书'}")
         lines.append(f"文书类型：{_document_type_label(legal_risk.get('document_type'))}")
+        lines.append(f"解析方式：{legal_risk.get('extraction_method', 'unknown')}；OCR 状态：{legal_risk.get('ocr_status', 'not_needed')}；使用页码：{', '.join(str(item) for item in legal_risk.get('pages_used', [])) or '未记录'}。")
         warnings = "、".join(legal_risk.get("warnings", [])) or "无"
         lines.append(f"解析提示：{warnings}")
+        lines.append("")
+        field_sources = legal_risk.get("field_sources", {})
+        if field_sources:
+            lines.append("字段来源：")
+            for field, source in list(field_sources.items())[:6]:
+                if isinstance(source, dict):
+                    lines.append(f"- {field}：{source.get('source', '-')}; 可信度 {source.get('confidence', '-')}")
+                else:
+                    lines.append(f"- {field}：{source}")
+            lines.append("")
+        lines.append("合同/条款风险：")
         lines.append("")
         lines.append("| 风险项 | 风险等级 | 结论 | 证据片段 |")
         lines.append("|---|---|---|---|")
@@ -181,6 +193,8 @@ def write_report(
         lines.append(f"- 日期线索：{dates}。")
         judicial = legal_risk.get("judicial_analysis") or {}
         if judicial:
+            lines.append("")
+            lines.append("判决/执行/调解文书线索：")
             points = "；".join(judicial.get("adjudication_points", [])[:2]) or "未识别"
             statuses = "；".join(judicial.get("execution_statuses", [])[:2]) or "未识别"
             terms = "；".join(judicial.get("mediation_terms", [])[:2]) or "未识别"
@@ -189,6 +203,14 @@ def write_report(
             lines.append(f"- 执行状态：{statuses}。")
             lines.append(f"- 调解履行：{terms}。")
             lines.append(f"- 金额线索：{amounts}。")
+        impacts = legal_risk.get("strategy_impacts", {})
+        if impacts:
+            lines.append("")
+            lines.append("文书对策略的影响：")
+            lines.append(f"- 报价方向：{impacts.get('pricing_direction', 'neutral')}。")
+            lines.append(f"- 执行分流：{impacts.get('execution_route') or '未触发专项分流'}。")
+            for impact in impacts.get("impacts", [])[:3]:
+                lines.append(f"- {impact}")
         lines.append("")
         lines.append("合同/文书下一步：")
         for action in legal_risk.get("next_actions", [])[:5]:

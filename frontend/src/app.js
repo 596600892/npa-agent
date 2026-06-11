@@ -18,6 +18,7 @@ const state = {
   selectedMode: "redacted_cloud",
   modelProviders: [],
   voiceProviders: [],
+  documentParser: null,
   yindengSubscriptions: [],
   yindengAlerts: [],
   knowledgeNotes: [],
@@ -450,8 +451,8 @@ async function confirmMapping() {
 async function uploadLegalDocument() {
   if (!state.project) await createProject();
   const file = $("legalDocInput").files[0];
-  if (!file) return alert("请先选择 PDF、DOCX 或 TXT 合同/条款文件");
-  $("legalStatus").textContent = "正在提取文本...";
+  if (!file) return alert("请先选择 PDF、图片、DOCX、TXT 或 HTML 文书");
+  $("legalStatus").textContent = "正在解析文书...";
   const content = await fileToBase64(file);
   const uploaded = await apiPost(`/api/projects/${state.project.id}/legal-documents`, {
     filename: file.name,
@@ -462,7 +463,7 @@ async function uploadLegalDocument() {
     return;
   }
   state.legalDocument = uploaded.document;
-  $("legalStatus").textContent = `文本质量 ${uploaded.document.text_quality}`;
+  $("legalStatus").textContent = `${extractionMethodLabel(uploaded.document.extraction_method)} · 文本质量 ${uploaded.document.text_quality}`;
   const analyzed = await apiPost(`/api/projects/${state.project.id}/legal-documents/${uploaded.document.id}/analyze`, {});
   if (!analyzed.ok) {
     $("legalStatus").textContent = analyzed.message || "分析失败";
@@ -477,12 +478,15 @@ async function uploadLegalDocument() {
 function renderLegalRisk(risk) {
   const wrap = $("legalRiskCards");
   if (!risk) {
-    wrap.innerHTML = `<p class="muted-copy">支持 PDF、DOCX、TXT。扫描 PDF 会提示先做 OCR，不影响资产包主流程。</p>`;
+    const ocr = state.documentParser?.ocr;
+    const ocrText = ocr ? `本地 OCR：${escapeHtml(ocr.status)}` : "正在检测本地 OCR";
+    wrap.innerHTML = `<p class="muted-copy">支持 PDF、图片、DOCX、TXT、HTML。PDF 可以是扫描件；${ocrText}。</p>`;
     return;
   }
   const sections = Object.values(risk.risks || {});
   const nextActions = (risk.next_actions || []).slice(0, 3).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
   const judicial = risk.judicial_analysis;
+  const impacts = risk.strategy_impacts;
   const judicialHtml = judicial
     ? `
       <div class="risk-summary secondary">
@@ -491,12 +495,22 @@ function renderLegalRisk(risk) {
       </div>
     `
     : "";
+  const impactHtml = impacts
+    ? `
+      <div class="risk-summary secondary">
+        <strong>策略影响</strong>
+        <span>报价 ${escapeHtml(impacts.pricing_direction || "neutral")} · 执行 ${escapeHtml(impacts.execution_route || "未触发专项分流")}</span>
+      </div>
+    `
+    : "";
   wrap.innerHTML = `
     <div class="risk-summary">
       <strong>整体风险：${escapeHtml(riskLabel(risk.overall_risk))}</strong>
       <span>${escapeHtml(documentTypeLabel(risk.document_type))} · 可信度 ${escapeHtml(risk.confidence)} · 文本质量 ${escapeHtml(risk.text_quality)} · ${escapeHtml(risk.filename || "合同/文书")}</span>
+      <span>${escapeHtml(extractionMethodLabel(risk.extraction_method))} · OCR ${escapeHtml(risk.ocr_status || "not_needed")} · 页码 ${(risk.pages_used || []).map(escapeHtml).join("、") || "未记录"}</span>
     </div>
     ${judicialHtml}
+    ${impactHtml}
     <div class="risk-card-grid">
       ${sections
         .map(
@@ -512,6 +526,19 @@ function renderLegalRisk(risk) {
     </div>
     <ul class="risk-next">${nextActions}</ul>
   `;
+}
+
+function extractionMethodLabel(value) {
+  return {
+    text: "文本",
+    docx_text: "DOCX 文本",
+    html_text: "HTML 文本",
+    pdf_text: "PDF 文本层",
+    pdf_ocr: "PDF OCR",
+    image_ocr: "图片 OCR",
+    ocr_unavailable: "OCR 不可用",
+    unknown: "未知解析方式",
+  }[value || "unknown"] || value || "未知解析方式";
 }
 
 function documentTypeLabel(value) {
@@ -1007,6 +1034,14 @@ async function loadProviders() {
   fillSelect($("voiceProvider"), state.voiceProviders, "builtin_browser");
 }
 
+async function loadDocumentParserStatus() {
+  const data = await apiGet("/api/settings/document-parser");
+  if (!data.ok) return;
+  state.documentParser = data;
+  if (state.latestLegalRisk) renderLegalRisk(state.latestLegalRisk);
+  else renderLegalRisk(null);
+}
+
 function applyProviderDefaults() {
   const modelProvider = providerById(state.modelProviders, $("modelProvider").value);
   if (!$("modelBaseUrl").value && modelProvider.base_url) $("modelBaseUrl").value = modelProvider.base_url;
@@ -1111,11 +1146,17 @@ function renderYindengList(notices) {
   for (const notice of notices) {
     const card = document.createElement("div");
     card.className = "notice-card";
+    const attachmentSummary = (notice.attachments || [])
+      .slice(0, 3)
+      .map((item) => `${item.label || "附件"}:${item.parse_status || item.file_type || "未解析"}`)
+      .join(" · ");
+    const extraction = notice.parsed?.extraction?.extraction_method || notice.parsed?.source_mix || "文本";
     card.innerHTML = `
       <strong>${escapeHtml(notice.title)}</strong>
-      <span>置信度 ${escapeHtml(notice.confidence)} · ${escapeHtml(notice.asset_type || "unknown")} · 附件 ${(notice.attachments || []).length}</span>
+      <span>置信度 ${escapeHtml(notice.confidence)} · ${escapeHtml(notice.asset_type || "unknown")} · 解析 ${escapeHtml(extraction)} · 附件 ${(notice.attachments || []).length}</span>
       <span>本金 ${escapeHtml(money(notice.principal))} · 户数 ${escapeHtml(notice.debtor_count ?? "未识别")}</span>
       <span>地区 ${(notice.regions || []).map(escapeHtml).join("、") || "未识别"}</span>
+      ${attachmentSummary ? `<small>${escapeHtml(attachmentSummary)}</small>` : ""}
       <button class="text-button" data-notice-id="${escapeHtml(notice.id)}">生成项目</button>
     `;
     card.querySelector("button").onclick = () => createProjectFromNotice(notice.id);
@@ -1166,6 +1207,10 @@ async function fetchYindeng() {
     return;
   }
   $("yindengStatus").textContent = `已解析：${data.notice.confidence}`;
+  if (data.attachment_extractions?.length) {
+    const parsedCount = data.attachment_extractions.filter((item) => item.parse_status === "parsed").length;
+    $("yindengStatus").textContent = `已解析：${data.notice.confidence} · 附件 ${parsedCount}/${data.attachment_extractions.length}`;
+  }
   $("aiInput").value = data.notice.raw_text.slice(0, 2500);
   await loadYindengNotices();
 }
@@ -1181,6 +1226,26 @@ async function parseYindengText() {
   }
   $("yindengStatus").textContent = `已解析：${data.notice.confidence}`;
   $("aiInput").value = text.slice(0, 2500);
+  await loadYindengNotices();
+}
+
+async function parseYindengFile() {
+  const file = $("yindengFileInput").files[0];
+  if (!file) return alert("请先选择银登公告 PDF、图片、TXT 或 HTML 文件");
+  $("yindengStatus").textContent = "解析公告文件...";
+  const content = await fileToBase64(file);
+  const data = await apiPost("/api/intelligence/yindeng/parse", {
+    filename: file.name,
+    content_base64: content,
+    source_type: "manual_file",
+    source_url: $("yindengUrl").value.trim(),
+  });
+  if (!data.ok) {
+    $("yindengStatus").textContent = data.message || "文件解析失败";
+    return;
+  }
+  $("yindengStatus").textContent = `已解析文件：${data.notice.confidence}`;
+  $("aiInput").value = data.notice.raw_text.slice(0, 2500);
   await loadYindengNotices();
 }
 
@@ -1314,6 +1379,7 @@ function bindEvents() {
   $("saveVoiceBtn").onclick = saveVoice;
   $("fetchYindengBtn").onclick = fetchYindeng;
   $("parseYindengTextBtn").onclick = parseYindengText;
+  $("parseYindengFileBtn").onclick = parseYindengFile;
   $("saveYindengSubscriptionBtn").onclick = saveYindengSubscription;
   $("generateAiBtn").onclick = generateAi;
   $("voiceListenBtn").onclick = startVoiceInput;
@@ -1361,6 +1427,7 @@ async function init() {
   renderGuidance();
   await loadHealth();
   await loadProviders();
+  await loadDocumentParserStatus();
   applyProviderDefaults();
   await loadProjects();
   const model = await apiGet("/api/settings/model");

@@ -89,9 +89,9 @@
                   <h2>3. 补充合同/文书</h2>
                   <span id="legalStatus">可选上传</span>
                 </div>
-                <p class="muted-copy">可选但很有价值：合同能帮助判断管辖、送达、债转通知、时效和息费风险。</p>
-                <input id="legalDocInput" type="file" accept=".pdf,.docx,.txt" />
-                <button id="uploadLegalBtn" class="primary-button">上传并分析合同</button>
+                <p class="muted-copy">可选但很有价值：支持合同、判决书、执行文书、调解书；PDF 可以是扫描件，也支持图片、DOCX、TXT、HTML。</p>
+                <input id="legalDocInput" type="file" accept=".pdf,.docx,.txt,.html,.htm,.png,.jpg,.jpeg,.webp" />
+                <button id="uploadLegalBtn" class="primary-button">上传并分析文书</button>
                 <div id="legalRiskCards" class="risk-list">
                   <p class="muted-copy">支持 PDF、DOCX、TXT。扫描 PDF 会提示先做 OCR，不影响资产包主流程。</p>
                 </div>
@@ -204,6 +204,8 @@
             <button id="fetchYindengBtn" class="primary-button">抓取并解析公告</button>
             <textarea id="yindengText" rows="5" placeholder="URL 抓取失败时，也可以粘贴公告正文解析"></textarea>
             <button id="parseYindengTextBtn" class="text-button">解析粘贴正文</button>
+            <input id="yindengFileInput" type="file" accept=".pdf,.txt,.html,.htm,.png,.jpg,.jpeg,.webp" />
+            <button id="parseYindengFileBtn" class="text-button">解析公告 PDF/图片</button>
             <div class="inline-form">
               <input id="yindengKeyword" type="text" placeholder="订阅关键词，例如 广东、消费贷、个人不良" />
               <button id="saveYindengSubscriptionBtn" class="text-button">订阅关键词</button>

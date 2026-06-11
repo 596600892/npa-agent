@@ -212,6 +212,13 @@ def init_db() -> None:
               text_quality TEXT NOT NULL,
               warnings_json TEXT NOT NULL,
               page_count INTEGER,
+              is_scanned_pdf INTEGER DEFAULT 0,
+              extraction_method TEXT DEFAULT 'unknown',
+              pages_used_json TEXT DEFAULT '[]',
+              ocr_status TEXT DEFAULT 'not_needed',
+              ocr_confidence REAL,
+              attachments_json TEXT DEFAULT '[]',
+              field_sources_json TEXT DEFAULT '{}',
               created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS legal_risk_analyses(
@@ -298,6 +305,19 @@ def init_db() -> None:
             );
             """
         )
+        _ensure_column(conn, "legal_documents", "is_scanned_pdf", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "legal_documents", "extraction_method", "TEXT DEFAULT 'unknown'")
+        _ensure_column(conn, "legal_documents", "pages_used_json", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "legal_documents", "ocr_status", "TEXT DEFAULT 'not_needed'")
+        _ensure_column(conn, "legal_documents", "ocr_confidence", "REAL")
+        _ensure_column(conn, "legal_documents", "attachments_json", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "legal_documents", "field_sources_json", "TEXT DEFAULT '{}'")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _secrets_path() -> Path:
@@ -693,8 +713,9 @@ def insert_legal_document(record: dict) -> None:
         conn.execute(
             """
             INSERT INTO legal_documents(
-              id,project_id,filename,file_type,stored_path,sha256,extracted_text,parser_version,text_quality,warnings_json,page_count,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+              id,project_id,filename,file_type,stored_path,sha256,extracted_text,parser_version,text_quality,warnings_json,page_count,
+              is_scanned_pdf,extraction_method,pages_used_json,ocr_status,ocr_confidence,attachments_json,field_sources_json,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 record["id"],
@@ -708,6 +729,13 @@ def insert_legal_document(record: dict) -> None:
                 record["text_quality"],
                 json.dumps(record.get("warnings", []), ensure_ascii=False),
                 record.get("page_count"),
+                1 if record.get("is_scanned_pdf") else 0,
+                record.get("extraction_method", "unknown"),
+                json.dumps(record.get("pages_used", []), ensure_ascii=False),
+                record.get("ocr_status", "not_needed"),
+                record.get("ocr_confidence"),
+                json.dumps(record.get("attachments", []), ensure_ascii=False),
+                json.dumps(record.get("field_sources", {}), ensure_ascii=False),
                 record["created_at"],
             ),
         )
@@ -716,6 +744,10 @@ def insert_legal_document(record: dict) -> None:
 def _legal_document_row(row: sqlite3.Row, include_text: bool = False) -> dict:
     data = dict(row)
     data["warnings"] = json.loads(data.pop("warnings_json"))
+    data["is_scanned_pdf"] = bool(data.get("is_scanned_pdf"))
+    data["pages_used"] = json.loads(data.pop("pages_used_json", "[]") or "[]")
+    data["attachments"] = json.loads(data.pop("attachments_json", "[]") or "[]")
+    data["field_sources"] = json.loads(data.pop("field_sources_json", "{}") or "{}")
     if not include_text:
         data.pop("extracted_text", None)
     return data

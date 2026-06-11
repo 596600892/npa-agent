@@ -127,10 +127,10 @@ class ApiIntegrationTests(unittest.TestCase):
     def test_legal_document_unsupported_type_returns_actionable_error(self):
         project = self.post("/api/projects", {"name": "错误合同样例", "asset_type": "consumer_loan"})["project"]
         content = base64.b64encode(b"not a contract").decode("ascii")
-        error = self.post_error(f"/api/projects/{project['id']}/legal-documents", {"filename": "scan.png", "content_base64": content})
+        error = self.post_error(f"/api/projects/{project['id']}/legal-documents", {"filename": "scan.exe", "content_base64": content})
         self.assertFalse(error["ok"])
         self.assertEqual(error["code"], "unsupported_legal_document_type")
-        self.assertIn("upload_pdf_docx_txt", error["next_actions"])
+        self.assertIn("upload_pdf_image_docx_txt_html", error["next_actions"])
 
 
 if __name__ == "__main__":

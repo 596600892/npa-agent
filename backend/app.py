@@ -19,6 +19,7 @@ from backend.core.analysis import run_analysis
 from backend.core.company_history import build_court_profiles, normalize_history_rows
 from backend.core.company_history_mapping import preview_history_mapping
 from backend.core.contract_risk_analyzer import analyze_contract_risk
+from backend.core.document_ingestion import ingest_bytes, parser_status
 from backend.core.document_text_extractor import DocumentExtractionError, extract_document_text
 from backend.core.data_quality import data_quality
 from backend.core.execution_plan import build_execution_plan
@@ -124,6 +125,46 @@ def save_yindeng_notice_with_alerts(preliminary, raw_text: str, source_id: str, 
     db.insert_yindeng_notice(notice)
     alerts = create_yindeng_alerts(notice)
     return notice, False, alerts
+
+
+def enrich_yindeng_with_public_attachments(preliminary, fetched) -> tuple[object, str, str, list[dict]]:
+    combined_text = fetched.raw_text
+    sha_parts = [fetched.raw_sha256]
+    enriched = []
+    used_any = False
+    for attachment in preliminary.attachments[:3]:
+        url = attachment.get("url") or ""
+        suffix = Path(urlparse(url).path).suffix.lower()
+        if suffix not in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".html", ".htm", ".docx"}:
+            enriched.append({**attachment, "parse_status": "skipped_unsupported_attachment"})
+            continue
+        try:
+            attached = fetch_public_url(url)
+        except YindengFetchError as exc:
+            enriched.append({**attachment, "parse_status": exc.code, "message": exc.message})
+            continue
+        sha_parts.append(attached.raw_sha256)
+        if attached.raw_text.strip():
+            used_any = True
+            combined_text += f"\n\n[银登附件解析: {attachment.get('label') or url}]\n{attached.raw_text}"
+        enriched.append(
+            {
+                **attachment,
+                "parse_status": "parsed" if attached.raw_text.strip() else "empty",
+                "sha256": attached.raw_sha256,
+                "content_type": attached.content_type,
+                "extraction": attached.ingestion or {"extraction_method": "text", "text_quality": "unknown"},
+            }
+        )
+    if not enriched:
+        return preliminary, combined_text, fetched.raw_sha256, []
+    parsed = parse_yindeng_notice(combined_text, fetched.url, fetched.content_type, fetched.ingestion)
+    parsed.attachments = enriched
+    parsed.parsed["attachments"] = enriched
+    parsed.parsed["attachment_extractions"] = enriched
+    parsed.parsed["source_mix"] = "网页正文+公开附件" if used_any else "网页正文"
+    raw_sha = hashlib.sha256("|".join(sha_parts).encode("utf-8")).hexdigest()
+    return parsed, combined_text, raw_sha, enriched
 
 
 def create_yindeng_alerts(notice: dict) -> list[dict]:
@@ -300,6 +341,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"ok": True, "voice": db.get_setting("voice", default_voice_setting())})
             if parsed.path == "/api/settings/voice/providers":
                 return self._send_json(200, {"ok": True, "providers": voice_provider_options()})
+            if parsed.path == "/api/settings/document-parser":
+                return self._send_json(200, parser_status())
             if parsed.path == "/api/intelligence/yindeng/notices":
                 return self._send_json(200, {"ok": True, "notices": db.list_yindeng_notices()})
             if parsed.path == "/api/intelligence/yindeng/subscriptions":
@@ -406,6 +449,13 @@ class Handler(BaseHTTPRequestHandler):
                     "text_quality": extracted.text_quality,
                     "warnings": extracted.warnings,
                     "page_count": extracted.page_count,
+                    "is_scanned_pdf": extracted.is_scanned_pdf,
+                    "extraction_method": extracted.extraction_method,
+                    "pages_used": extracted.pages_used,
+                    "ocr_status": extracted.ocr_status,
+                    "ocr_confidence": extracted.ocr_confidence,
+                    "attachments": extracted.attachments,
+                    "field_sources": extracted.field_sources,
                     "created_at": now_iso(),
                 }
                 db.insert_legal_document(record)
@@ -429,6 +479,13 @@ class Handler(BaseHTTPRequestHandler):
                         "text_quality": document["text_quality"],
                         "parser_version": document["parser_version"],
                         "warnings": document["warnings"],
+                        "is_scanned_pdf": document.get("is_scanned_pdf"),
+                        "extraction_method": document.get("extraction_method"),
+                        "pages_used": document.get("pages_used", []),
+                        "ocr_status": document.get("ocr_status"),
+                        "ocr_confidence": document.get("ocr_confidence"),
+                        "attachments": document.get("attachments", []),
+                        "field_sources": document.get("field_sources", {}),
                     },
                 )
                 analysis_record = {"id": make_id("lrisk"), "project_id": project_id, "document_id": document_id, "risk": risk, "created_at": now_iso()}
@@ -711,6 +768,19 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 stored = db.set_setting("model", payload)
                 return self._send_json(200, {"ok": True, "model": stored})
+            if parsed.path == "/api/settings/document-parser/test":
+                return self._send_json(200, parser_status())
+            if parsed.path == "/api/documents/inspect":
+                payload = self._read_json()
+                filename = payload.get("filename") or "document.pdf"
+                content = payload.get("content_base64") or ""
+                if not content:
+                    return self._error(400, "missing_document_content", "请上传需要检测的 PDF、图片、DOCX、TXT 或 HTML 文件。", ["upload_document"])
+                ingested = ingest_bytes(base64.b64decode(content), filename)
+                result = ingested.as_dict()
+                result["text_preview"] = ingested.text[:1200]
+                result.pop("text", None)
+                return self._send_json(200, {"ok": True, "document": result, "next_actions": ["upload_to_project", "configure_ocr_if_needed"]})
             if parsed.path == "/api/settings/model/test":
                 payload = self._read_json()
                 result = test_model_config(payload or None)
@@ -782,31 +852,41 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 fetched = fetch_public_url(payload["url"])
                 source_id = make_id("src")
-                preliminary = parse_yindeng_notice(fetched.raw_text, fetched.url, fetched.content_type)
+                preliminary = parse_yindeng_notice(fetched.raw_text, fetched.url, fetched.content_type, fetched.ingestion)
+                preliminary, notice_raw_text, notice_raw_sha, attachment_extractions = enrich_yindeng_with_public_attachments(preliminary, fetched)
                 db.insert_intelligence_source(
                     {
                         "id": source_id,
                         "source_type": payload.get("source_type", "public_url"),
                         "url": fetched.url,
                         "title": preliminary.title,
-                        "raw_text": fetched.raw_text,
-                        "raw_sha256": fetched.raw_sha256,
+                        "raw_text": notice_raw_text,
+                        "raw_sha256": notice_raw_sha,
                         "fetched_at": now_iso(),
                         "created_at": now_iso(),
                     }
                 )
-                notice, duplicate, alerts = save_yindeng_notice_with_alerts(preliminary, fetched.raw_text, source_id, fetched.url, fetched.raw_sha256)
-                db.audit(None, "yindeng_notice_fetched", {"notice_id": notice["id"], "source_url": fetched.url, "sha256": fetched.raw_sha256, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts)})
-                return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "duplicate": duplicate, "alerts": alerts, "next_actions": ["review_notice", "create_project", "paste_notice_text_if_low_confidence"]})
+                notice, duplicate, alerts = save_yindeng_notice_with_alerts(preliminary, notice_raw_text, source_id, fetched.url, notice_raw_sha)
+                db.audit(None, "yindeng_notice_fetched", {"notice_id": notice["id"], "source_url": fetched.url, "sha256": notice_raw_sha, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts), "attachment_count": len(attachment_extractions)})
+                return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "duplicate": duplicate, "alerts": alerts, "attachment_extractions": attachment_extractions, "next_actions": ["review_notice", "create_project", "paste_notice_text_if_low_confidence"]})
 
             if parsed.path == "/api/intelligence/yindeng/parse":
                 payload = self._read_json()
                 raw_text = payload.get("text") or payload.get("content") or ""
+                ingestion = None
+                if not raw_text.strip() and payload.get("content_base64"):
+                    filename = payload.get("filename") or "notice.pdf"
+                    ingested = ingest_bytes(base64.b64decode(payload["content_base64"]), filename)
+                    raw_text = ingested.text
+                    ingestion = ingested.as_dict()
                 if not raw_text.strip():
-                    return self._error(400, "missing_notice_text", "请粘贴银登公告正文或先使用公开 URL 抓取。", ["paste_notice_text", "fetch_public_url"])
+                    return self._error(400, "missing_notice_text", "请粘贴银登公告正文、上传公告 PDF/图片，或先使用公开 URL 抓取。", ["paste_notice_text", "upload_notice_pdf_or_image", "fetch_public_url"])
                 source_id = make_id("src")
                 raw_sha256 = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
-                preliminary = parse_yindeng_notice(raw_text, payload.get("source_url"), payload.get("content_type"))
+                preliminary = parse_yindeng_notice(raw_text, payload.get("source_url"), payload.get("content_type"), ingestion)
+                if ingestion and ingestion.get("attachments"):
+                    preliminary.attachments = ingestion["attachments"]
+                    preliminary.parsed["attachments"] = ingestion["attachments"]
                 db.insert_intelligence_source(
                     {
                         "id": source_id,
@@ -908,7 +988,7 @@ class Handler(BaseHTTPRequestHandler):
         except YindengFetchError as exc:
             return self._error(400, exc.code, exc.message, exc.next_actions)
         except DocumentExtractionError as exc:
-            return self._error(400, exc.code, exc.message, ["upload_pdf_docx_txt", "paste_text_version"])
+            return self._error(400, exc.code, exc.message, ["upload_pdf_image_docx_txt_html", "paste_text_version", "configure_local_ocr"])
         except ModelGatewayError as exc:
             return self._error(400, exc.code, exc.message, ["configure_model", "use_local_rules"])
         except VoiceGatewayError as exc:

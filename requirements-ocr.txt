@@ -1,0 +1,5 @@
+# Optional local OCR dependencies. Install only when scanned PDFs/images need OCR:
+# .venv/bin/pip install -r requirements-ocr.txt
+pdf2image>=1.17.0
+pytesseract>=0.3.10
+Pillow>=10.0.0

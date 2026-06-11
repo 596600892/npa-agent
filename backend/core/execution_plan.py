@@ -140,6 +140,11 @@ def _fallback_tier(account: dict) -> str:
 def _batch_for(account: dict, tier: str, legal_risk: dict | None) -> str:
     court = account.get("optional", {}).get("jurisdiction_court")
     contract_no = account.get("optional", {}).get("contract_no")
+    route = (legal_risk or {}).get("strategy_impacts", {}).get("execution_route")
+    if route in {"enforcement_recovery_or_asset_trace", "litigation_or_enforcement_review"}:
+        return "litigation_review"
+    if route == "mediation_performance_check" and account.get("phone"):
+        return "phone_mediation_round1"
     if tier == "B" and (court or contract_no) and legal_risk and legal_risk.get("overall_risk") != "high":
         return "litigation_review"
     return {"A": "phone_mediation_round1", "B": "key_account_workout", "C": "small_batch_contact", "D": "missing_signal_enrichment"}.get(tier, "missing_signal_enrichment")
@@ -148,6 +153,13 @@ def _batch_for(account: dict, tier: str, legal_risk: dict | None) -> str:
 def _task_for_account(project_id: str, plan_id: str, batch_id: str, batch_key: str, tier: str, account: dict, legal_risk: dict | None) -> dict:
     priority = _priority_score(account, tier, batch_key, legal_risk)
     suggested_action, next_action = _actions(batch_key, tier)
+    route = (legal_risk or {}).get("strategy_impacts", {}).get("execution_route")
+    if route == "enforcement_recovery_or_asset_trace":
+        suggested_action, next_action = "执行恢复/财产线索补强", "核验终本、查控反馈和恢复执行材料"
+    elif route == "mediation_performance_check":
+        suggested_action, next_action = "调解履约核实", "核实履行期限、付款记录和违约责任"
+    elif route == "litigation_or_enforcement_review":
+        suggested_action, next_action = "判决生效与执行条件复核", "核验生效证明、判决主文和可执行金额"
     return {
         "id": f"{plan_id}_task_{account['id']}",
         "task_id": f"{plan_id}_task_{account['id']}",

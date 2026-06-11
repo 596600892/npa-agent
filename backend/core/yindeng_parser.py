@@ -178,7 +178,31 @@ def confidence_for(parsed: dict) -> str:
     return "low"
 
 
-def parse_yindeng_notice(raw: str, source_url: str | None = None, content_type: str | None = None) -> ParsedNotice:
+def _source_label(content_type: str | None, extraction_method: str | None = None) -> str:
+    if extraction_method:
+        if "ocr" in extraction_method:
+            return "PDF OCR"
+        if "pdf" in extraction_method:
+            return "PDF 文本层"
+        if "html" in extraction_method:
+            return "网页正文"
+        return extraction_method
+    if content_type and "html" in content_type.lower():
+        return "网页正文"
+    if content_type and "pdf" in content_type.lower():
+        return "PDF 文本层"
+    return "用户粘贴文本"
+
+
+def _field_sources(fields: dict, source: str) -> dict:
+    result = {}
+    for key, value in fields.items():
+        if value not in (None, "", [], {}):
+            result[key] = {"source": source, "confidence": "medium" if source in {"PDF OCR", "用户粘贴文本"} else "high"}
+    return result
+
+
+def parse_yindeng_notice(raw: str, source_url: str | None = None, content_type: str | None = None, ingestion: dict | None = None) -> ParsedNotice:
     if content_type and "html" in content_type.lower():
         text, attachments = html_to_text(raw)
     else:
@@ -202,9 +226,12 @@ def parse_yindeng_notice(raw: str, source_url: str | None = None, content_type: 
         "dates": extract_dates(text),
         "attachments": attachments,
     }
+    source = _source_label(content_type, (ingestion or {}).get("extraction_method"))
     parsed = {
         **fields,
         "text_preview": text[:1200],
-        "parser_version": "0.1",
+        "parser_version": "0.2",
+        "field_sources": _field_sources(fields, source),
+        "extraction": ingestion or {"extraction_method": source, "text_quality": "unknown"},
     }
     return ParsedNotice(confidence=confidence_for(fields), parsed=parsed, **fields)

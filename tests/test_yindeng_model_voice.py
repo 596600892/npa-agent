@@ -199,6 +199,57 @@ class NextStageTests(unittest.TestCase):
         loaded = self.get("/api/settings/model")
         self.assertNotIn("sk-local-secret", json.dumps(loaded, ensure_ascii=False))
 
+    def test_original_cloud_requires_confirmation_and_audit_is_redacted(self):
+        self.post(
+            "/api/settings/model",
+            {
+                "mode": "redacted_cloud",
+                "provider": "custom_openai_compatible",
+                "base_url": f"http://127.0.0.1:{self.fake_model_port}/v1",
+                "model": "fake-chat",
+                "api_key": "sk-local-secret",
+            },
+        )
+        denied = self.post(
+            "/api/ai/generate",
+            {
+                "purpose": "report_summary",
+                "content": "债务人张三，身份证440305199001011234，手机号13812345678。",
+                "safety_mode": "original_cloud",
+            },
+            allow_error=True,
+        )
+        self.assertFalse(denied["ok"])
+        self.assertEqual(denied["code"], "original_cloud_not_confirmed")
+        confirmation = self.post(
+            "/api/security/confirmations",
+            {
+                "action_type": "original_cloud_ai",
+                "confirmation_text": "我确认本次原文云端分析",
+                "safety_mode": "original_cloud",
+                "purpose": "report_summary",
+            },
+        )["confirmation"]
+        generated = self.post(
+            "/api/ai/generate",
+            {
+                "purpose": "report_summary",
+                "content": "债务人张三，身份证440305199001011234，手机号13812345678。",
+                "safety_mode": "original_cloud",
+                "confirm_original_cloud": True,
+                "confirmation_id": confirmation["id"],
+            },
+        )
+        self.assertTrue(generated["ok"])
+        self.assertFalse(generated["result"]["redacted"])
+        logs = self.get("/api/audit/logs?limit=20")["logs"]
+        blob = json.dumps(logs, ensure_ascii=False)
+        self.assertIn("ai_generated", blob)
+        self.assertNotIn("440305199001011234", blob)
+        self.assertNotIn("13812345678", blob)
+        summary = self.get("/api/audit/summary")["summary"]
+        self.assertGreaterEqual(summary["original_cloud_count"], 1)
+
     def test_model_provider_options_include_recommendation_metadata(self):
         providers = self.get("/api/settings/model/providers")
         self.assertTrue(providers["ok"])

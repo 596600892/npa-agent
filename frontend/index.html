@@ -229,6 +229,10 @@
             </label>
             <textarea id="aiInput" rows="7" placeholder="粘贴报告、公告或资产包摘要。默认脱敏后调用模型。"></textarea>
             <button id="generateAiBtn" class="primary-button">生成 AI 建议</button>
+            <div class="security-confirm-card">
+              <strong>原文云端确认</strong>
+              <textarea id="originalCloudConfirmText" rows="2" placeholder="选择原文云端时必须填写：我确认本次原文云端分析。"></textarea>
+            </div>
             <div id="aiOutput" class="ai-output"></div>
           </div>
 
@@ -274,6 +278,7 @@
           <div class="execution-toolbar">
             <button id="generateExecutionBtn" class="primary-button">生成执行计划</button>
             <a id="exportExecutionLink" class="secondary-link disabled-link" href="#" download>导出 Excel</a>
+            <button id="exportSensitiveExecutionBtn" class="text-button">确认后导出原文敏感版</button>
             <label>
               批次
               <select id="executionBatchFilter"></select>
@@ -309,6 +314,7 @@
           <div id="executionSummary" class="execution-summary">
             <p class="muted-copy">确认字段后可生成执行计划。我会自动分批次、给话术和下一步动作。</p>
           </div>
+          <textarea id="sensitiveExportConfirmText" rows="2" placeholder="原文敏感导出确认说明，例如：我确认本次原文敏感导出，仅限内部使用。"></textarea>
           <div id="executionTasks" class="execution-list"></div>
         </section>
 
@@ -377,6 +383,21 @@
               <button id="saveCourtExperienceBtn" class="text-button">保存法院经验</button>
             </div>
           </div>
+        </section>
+
+        <section class="panel security-panel">
+          <div class="panel-header">
+            <h2>安全与审计</h2>
+            <span id="auditStatus">本地审计</span>
+          </div>
+          <div id="auditSummary" class="audit-summary">
+            <p class="muted-copy">审计会记录高风险动作，但不会保存完整敏感正文。</p>
+          </div>
+          <div class="audit-toolbar">
+            <button id="refreshAuditBtn" class="text-button">刷新审计</button>
+            <span class="micro-status">原文云端、原文导出、联网抓取和长期记忆写入都会留痕。</span>
+          </div>
+          <div id="auditLogs" class="audit-list"></div>
         </section>
 
         <section class="panel private-skill-panel">

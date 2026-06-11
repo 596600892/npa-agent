@@ -218,6 +218,17 @@ def default_voice_setting() -> dict:
     }
 
 
+def validate_confirmation(confirmation_id: str | None, action_type: str, project_id: str | None = None) -> dict | None:
+    if not confirmation_id:
+        return None
+    confirmation = db.get_security_confirmation(confirmation_id)
+    if not confirmation or confirmation.get("action_type") != action_type:
+        return None
+    if project_id and confirmation.get("project_id") and confirmation.get("project_id") != project_id:
+        return None
+    return confirmation
+
+
 def knowledge_vault() -> KnowledgeVault:
     return KnowledgeVault(db.DATA_DIR / "knowledge")
 
@@ -325,7 +336,16 @@ class Handler(BaseHTTPRequestHandler):
                 tasks = db.list_execution_tasks(project_id)
                 if not tasks:
                     return self._error(404, "execution_plan_not_found", "请先生成处置执行计划。", ["generate_execution_plan"])
-                body = build_execution_export(tasks)
+                query = parse_qs(parsed.query)
+                export_mode = (query.get("mode") or ["redacted"])[0]
+                confirmation_id = (query.get("confirmation_id") or [None])[0]
+                if export_mode not in {"redacted", "original_sensitive"}:
+                    return self._error(400, "invalid_export_mode", "导出模式只支持 redacted 或 original_sensitive。", ["select_redacted_export"])
+                if export_mode == "original_sensitive" and not validate_confirmation(confirmation_id, "original_sensitive_export", project_id):
+                    db.audit(project_id, "execution_export_denied", {"export_mode": export_mode, "sensitive_data_access": True, "confirmation_id": confirmation_id})
+                    return self._error(403, "sensitive_export_not_confirmed", "原文敏感导出需要先完成二次确认。", ["create_sensitive_export_confirmation", "use_redacted_export"])
+                body = build_execution_export(tasks, mode=export_mode)
+                db.audit(project_id, "execution_exported", {"export_mode": export_mode, "sensitive_data_access": export_mode == "original_sensitive", "confirmation_id": confirmation_id})
                 self.send_response(200)
                 self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 self.send_header("Content-Length", str(len(body)))
@@ -343,6 +363,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"ok": True, "providers": voice_provider_options()})
             if parsed.path == "/api/settings/document-parser":
                 return self._send_json(200, parser_status())
+            if parsed.path == "/api/audit/logs":
+                query = parse_qs(parsed.query)
+                project_id = (query.get("project_id") or [None])[0]
+                limit = int((query.get("limit") or [100])[0])
+                return self._send_json(200, {"ok": True, "logs": db.list_audit_logs(project_id=project_id, limit=limit)})
+            if parsed.path == "/api/audit/summary":
+                return self._send_json(200, {"ok": True, "summary": db.audit_summary()})
+            match = re.fullmatch(r"/api/security/confirmations/([^/]+)", parsed.path)
+            if match:
+                confirmation = db.get_security_confirmation(unquote(match.group(1)))
+                if not confirmation:
+                    return self._error(404, "confirmation_not_found", "安全确认记录不存在")
+                return self._send_json(200, {"ok": True, "confirmation": confirmation})
             if parsed.path == "/api/intelligence/yindeng/notices":
                 return self._send_json(200, {"ok": True, "notices": db.list_yindeng_notices()})
             if parsed.path == "/api/intelligence/yindeng/subscriptions":
@@ -459,7 +492,7 @@ class Handler(BaseHTTPRequestHandler):
                     "created_at": now_iso(),
                 }
                 db.insert_legal_document(record)
-                db.audit(project_id, "legal_document_uploaded", {"document_id": document_id, "filename": record["filename"], "sha256": record["sha256"], "text_quality": record["text_quality"], "warnings": record["warnings"]})
+                db.audit(project_id, "legal_document_uploaded", {"document_id": document_id, "filename": record["filename"], "sha256": record["sha256"], "text_quality": record["text_quality"], "warnings": record["warnings"], "sensitive_data_access": True, "extraction_method": record.get("extraction_method"), "ocr_status": record.get("ocr_status"), "pages_used": record.get("pages_used", [])})
                 response_record = {key: value for key, value in record.items() if key != "extracted_text"}
                 return self._send_json(200, {"ok": True, "document": response_record, "next_actions": ["analyze_legal_document", "upload_text_version_if_needs_ocr"]})
 
@@ -490,7 +523,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 analysis_record = {"id": make_id("lrisk"), "project_id": project_id, "document_id": document_id, "risk": risk, "created_at": now_iso()}
                 db.insert_legal_risk_analysis(analysis_record)
-                db.audit(project_id, "legal_document_analyzed", {"document_id": document_id, "overall_risk": risk["overall_risk"], "confidence": risk["confidence"]})
+                db.audit(project_id, "legal_document_analyzed", {"document_id": document_id, "overall_risk": risk["overall_risk"], "confidence": risk["confidence"], "sensitive_data_access": True, "extraction_method": risk.get("extraction_method"), "ocr_status": risk.get("ocr_status"), "pages_used": risk.get("pages_used", [])})
                 return self._send_json(200, {"ok": True, "legal_risk": analysis_record, "next_actions": ["rerun_project_analysis", "review_legal_risk"]})
 
             match = re.fullmatch(r"/api/projects/([^/]+)/field-mapping/preview", parsed.path)
@@ -657,7 +690,7 @@ class Handler(BaseHTTPRequestHandler):
                     db.upsert_knowledge_note(note)
                     court_notes.append(note)
                 notes = [project_note, *court_notes]
-                db.audit(project_id, "knowledge_synced", {"note_ids": [note["id"] for note in notes], "court_note_count": len(court_notes)})
+                db.audit(project_id, "knowledge_synced", {"note_ids": [note["id"] for note in notes], "court_note_count": len(court_notes), "memory_write": True})
                 return self._send_json(200, {"ok": True, "project_note": project_note, "court_notes": court_notes, "notes": notes})
 
             if parsed.path == "/api/knowledge/search":
@@ -676,7 +709,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 updated = knowledge_vault().confirm_note(note, payload.get("confirmation_note"))
                 db.upsert_knowledge_note(updated)
-                db.audit(payload.get("project_id"), "knowledge_note_confirmed", {"note_id": note_id, "note_type": updated["note_type"]})
+                db.audit(payload.get("project_id"), "knowledge_note_confirmed", {"note_id": note_id, "note_type": updated["note_type"], "memory_write": True})
                 return self._send_json(200, {"ok": True, "note": updated})
 
             if parsed.path == "/api/knowledge/company-preferences":
@@ -685,7 +718,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(400, "missing_company_preference", "请填写偏好标题和内容。", ["fill_preference_title", "fill_preference_content"])
                 note = knowledge_vault().write_company_preference_note(payload)
                 db.upsert_knowledge_note(note)
-                db.audit(None, "company_preference_note_saved", {"note_id": note["id"], "status": note["status"], "preference_type": payload.get("preference_type")})
+                db.audit(None, "company_preference_note_saved", {"note_id": note["id"], "status": note["status"], "preference_type": payload.get("preference_type"), "memory_write": True})
                 return self._send_json(200, {"ok": True, "note": note})
 
             match = re.fullmatch(r"/api/knowledge/court-notes/(.+)/experience", parsed.path)
@@ -698,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
                 profile = db.get_court_profile(court_name)
                 note = knowledge_vault().write_court_experience_note(court_name, payload, profile)
                 db.upsert_knowledge_note(note)
-                db.audit(None, "court_experience_note_saved", {"note_id": note["id"], "court_name": court_name, "status": note["status"]})
+                db.audit(None, "court_experience_note_saved", {"note_id": note["id"], "court_name": court_name, "status": note["status"], "memory_write": True})
                 return self._send_json(200, {"ok": True, "note": note})
 
             match = re.fullmatch(r"/api/knowledge/court-notes/(.+)", parsed.path)
@@ -723,7 +756,7 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 note = knowledge_vault().write_court_note(profile, status="pending_confirmation" if not db.get_court_profile(court_name) else "confirmed")
                 db.upsert_knowledge_note(note)
-                db.audit(None, "court_note_saved", {"note_id": note["id"], "court_name": court_name, "status": note["status"]})
+                db.audit(None, "court_note_saved", {"note_id": note["id"], "court_name": court_name, "status": note["status"], "memory_write": True})
                 return self._send_json(200, {"ok": True, "note": note})
 
             if parsed.path == "/api/skills/private-drafts/generate":
@@ -741,7 +774,7 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     return self._error(400, str(exc), "无法生成私有 skill 草稿。", ["confirm_memory"])
                 db.insert_private_skill_draft(draft)
-                db.audit(None, "private_skill_draft_generated", {"draft_id": draft_id, "draft_type": draft_type, "source_note_count": len(draft["source_note_ids"]), "status": draft["status"]})
+                db.audit(None, "private_skill_draft_generated", {"draft_id": draft_id, "draft_type": draft_type, "source_note_count": len(draft["source_note_ids"]), "status": draft["status"], "memory_write": True})
                 return self._send_json(200, {"ok": True, "draft": draft, "next_actions": ["review_private_skill_draft", "keep_disabled_until_approved"]})
 
             match = re.fullmatch(r"/api/skills/private-drafts/([^/]+)/review", parsed.path)
@@ -761,13 +794,36 @@ class Handler(BaseHTTPRequestHandler):
                     "reviewed_at": now_iso(),
                 }
                 updated = db.update_private_skill_draft(draft_id, {"status": status, "review": review})
-                db.audit(None, "private_skill_draft_reviewed", {"draft_id": draft_id, "status": status, "reviewer": review["reviewer"]})
+                db.audit(None, "private_skill_draft_reviewed", {"draft_id": draft_id, "status": status, "reviewer": review["reviewer"], "memory_write": True})
                 return self._send_json(200, {"ok": True, "draft": updated, "enabled": False, "message": "本阶段只审核草稿，不自动启用或调用。"})
 
             if parsed.path == "/api/settings/model":
                 payload = self._read_json()
                 stored = db.set_setting("model", payload)
                 return self._send_json(200, {"ok": True, "model": stored})
+            if parsed.path == "/api/security/confirmations":
+                payload = self._read_json()
+                action_type = payload.get("action_type")
+                if action_type not in {"original_cloud_ai", "original_sensitive_export"}:
+                    return self._error(400, "unsupported_confirmation_action", "安全确认类型只支持 original_cloud_ai 或 original_sensitive_export。", ["select_supported_confirmation"])
+                confirmation_text = (payload.get("confirmation_text") or "").strip()
+                if len(confirmation_text) < 6:
+                    return self._error(400, "missing_confirmation_text", "请填写确认说明，例如：我确认本次原文云端分析。", ["enter_confirmation_text"])
+                record = {
+                    "id": make_id("confirm"),
+                    "project_id": payload.get("project_id"),
+                    "action_type": action_type,
+                    "confirmation_text": confirmation_text,
+                    "payload": {
+                        "purpose": payload.get("purpose"),
+                        "export_mode": payload.get("export_mode"),
+                        "safety_mode": payload.get("safety_mode"),
+                    },
+                    "created_at": now_iso(),
+                }
+                db.insert_security_confirmation(record)
+                db.audit(record.get("project_id"), "security_confirmation_created", {"confirmation_id": record["id"], "action_type": action_type, "safety_mode": payload.get("safety_mode"), "export_mode": payload.get("export_mode"), "sensitive_data_access": True})
+                return self._send_json(200, {"ok": True, "confirmation": db.get_security_confirmation(record["id"]), "next_actions": ["continue_high_risk_action"]})
             if parsed.path == "/api/settings/document-parser/test":
                 return self._send_json(200, parser_status())
             if parsed.path == "/api/documents/inspect":
@@ -867,7 +923,7 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
                 notice, duplicate, alerts = save_yindeng_notice_with_alerts(preliminary, notice_raw_text, source_id, fetched.url, notice_raw_sha)
-                db.audit(None, "yindeng_notice_fetched", {"notice_id": notice["id"], "source_url": fetched.url, "sha256": notice_raw_sha, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts), "attachment_count": len(attachment_extractions)})
+                db.audit(None, "yindeng_notice_fetched", {"notice_id": notice["id"], "source_url": fetched.url, "sha256": notice_raw_sha, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts), "attachment_count": len(attachment_extractions), "network_access": True})
                 return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "duplicate": duplicate, "alerts": alerts, "attachment_extractions": attachment_extractions, "next_actions": ["review_notice", "create_project", "paste_notice_text_if_low_confidence"]})
 
             if parsed.path == "/api/intelligence/yindeng/parse":
@@ -900,7 +956,7 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
                 notice, duplicate, alerts = save_yindeng_notice_with_alerts(preliminary, raw_text, source_id, payload.get("source_url"), raw_sha256)
-                db.audit(None, "yindeng_notice_parsed", {"notice_id": notice["id"], "source_url": payload.get("source_url"), "sha256": raw_sha256, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts)})
+                db.audit(None, "yindeng_notice_parsed", {"notice_id": notice["id"], "source_url": payload.get("source_url"), "sha256": raw_sha256, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts), "sensitive_data_access": False})
                 return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "duplicate": duplicate, "alerts": alerts, "next_actions": ["review_notice", "create_project"]})
 
             if parsed.path == "/api/intelligence/yindeng/subscriptions":
@@ -937,8 +993,17 @@ class Handler(BaseHTTPRequestHandler):
                 content = payload.get("content") or ""
                 if not content.strip():
                     return self._error(400, "missing_content", "请先提供需要 AI 分析的内容。", ["paste_content", "select_report"])
+                model_setting = db.get_setting("model", default_model_setting())
+                requested_mode = payload.get("safety_mode") or model_setting.get("mode") or "redacted_cloud"
+                confirmation_id = payload.get("confirmation_id")
+                if requested_mode == "original_cloud" and (not payload.get("confirm_original_cloud") or not validate_confirmation(confirmation_id, "original_cloud_ai", payload.get("project_id"))):
+                    db.audit(payload.get("project_id"), "ai_original_cloud_denied", {"purpose": purpose, "safety_mode": requested_mode, "sensitive_data_access": True, "network_access": True, "confirmation_id": confirmation_id})
+                    return self._error(403, "original_cloud_not_confirmed", "原文云端分析需要先完成二次确认。", ["create_original_cloud_confirmation", "switch_to_redacted_cloud"])
                 try:
-                    result = generate_text(purpose, content, payload.get("safety_mode"), payload.get("project_id"), payload.get("model_override"))
+                    override = payload.get("model_override") or {}
+                    if requested_mode == "original_cloud":
+                        override = {**override, "allow_original_sensitive_data": True}
+                    result = generate_text(purpose, content, requested_mode, payload.get("project_id"), override)
                     db.insert_model_call(
                         {
                             "id": make_id("mcall"),
@@ -946,13 +1011,14 @@ class Handler(BaseHTTPRequestHandler):
                             "provider": result.provider,
                             "model": result.model,
                             "purpose": purpose,
-                            "safety_mode": payload.get("safety_mode") or "redacted_cloud",
+                            "safety_mode": requested_mode,
                             "prompt_chars": result.prompt_chars,
                             "response_chars": result.response_chars,
                             "status": "success",
                             "created_at": now_iso(),
                         }
                     )
+                    db.audit(payload.get("project_id"), "ai_generated", {"provider": result.provider, "model": result.model, "purpose": purpose, "safety_mode": requested_mode, "sensitive_data_access": requested_mode == "original_cloud", "network_access": True, "confirmation_id": confirmation_id, "prompt_chars": result.prompt_chars, "response_chars": result.response_chars, "redacted": result.redacted})
                     return self._send_json(200, {"ok": True, "result": {"text": result.text, "provider": result.provider, "model": result.model, "redacted": result.redacted, "prompt_audit": result.prompt_audit, "recommended_model": result.recommended_model, "next_actions": ["review_prompt_audit", "save_result_if_useful"]}})
                 except ModelGatewayError as exc:
                     db.insert_model_call(
@@ -962,7 +1028,7 @@ class Handler(BaseHTTPRequestHandler):
                             "provider": "unknown",
                             "model": "unknown",
                             "purpose": purpose,
-                            "safety_mode": payload.get("safety_mode") or "redacted_cloud",
+                            "safety_mode": requested_mode,
                             "prompt_chars": len(content),
                             "response_chars": 0,
                             "status": "error",
@@ -970,6 +1036,7 @@ class Handler(BaseHTTPRequestHandler):
                             "created_at": now_iso(),
                         }
                     )
+                    db.audit(payload.get("project_id"), "ai_generate_failed", {"purpose": purpose, "safety_mode": requested_mode, "network_access": True, "error": exc.code})
                     return self._error(400, exc.code, exc.message, ["configure_model", "check_provider_base_url", "use_local_rules"])
 
             if parsed.path == "/api/voice/tts":
@@ -980,9 +1047,11 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     result = synthesize_speech(text, payload.get("voice_override"))
                     db.insert_voice_call({"id": make_id("vcall"), "provider": result.provider, "voice": result.voice, "text_chars": len(text), "status": "success", "created_at": now_iso()})
+                    db.audit(None, "voice_tts_generated", {"provider": result.provider, "voice": result.voice, "text_chars": len(text), "network_access": result.provider != "builtin_browser", "sensitive_data_access": False})
                     return self._send_json(200, {"ok": True, "audio_base64": base64.b64encode(result.audio).decode("ascii"), "content_type": result.content_type, "provider": result.provider, "voice": result.voice})
                 except VoiceGatewayError as exc:
                     db.insert_voice_call({"id": make_id("vcall"), "provider": "unknown", "voice": None, "text_chars": len(text), "status": "error", "error": exc.code, "created_at": now_iso()})
+                    db.audit(None, "voice_tts_failed", {"provider": "unknown", "text_chars": len(text), "network_access": True, "error": exc.code})
                     return self._error(400, exc.code, exc.message, ["configure_voice", "use_builtin_browser_voice"])
             return self._not_found()
         except YindengFetchError as exc:

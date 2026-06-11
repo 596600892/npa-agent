@@ -923,6 +923,102 @@ textarea {
   line-height: 1.65;
 }
 
+.security-confirm-card {
+  border: 1px solid #ead8c8;
+  background: #fff8ef;
+  border-radius: 6px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.security-confirm-card strong {
+  color: #7a4b18;
+  font-size: 14px;
+}
+
+.audit-summary,
+.audit-list {
+  display: grid;
+  gap: 10px;
+}
+
+.audit-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.audit-metrics span {
+  border: 1px solid #e0e8e3;
+  background: #fbfcf8;
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.audit-metrics strong {
+  display: block;
+  color: var(--teal);
+  font-size: 20px;
+}
+
+.audit-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.micro-status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.audit-card {
+  border: 1px solid #e0e8e3;
+  background: #fbfcf8;
+  border-radius: 6px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.audit-card strong,
+.audit-card span,
+.audit-card small {
+  overflow-wrap: anywhere;
+}
+
+.audit-card > div:first-child {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: start;
+}
+
+.audit-card > div:first-child span,
+.audit-card small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.audit-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.audit-flags span {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .voice-panel {
   align-content: start;
   display: grid;
@@ -1077,6 +1173,7 @@ label {
   .private-skill-toolbar,
   .private-skill-grid,
   .review-actions,
+  .audit-metrics,
   .execution-toolbar,
   .execution-metrics,
   .execution-update {

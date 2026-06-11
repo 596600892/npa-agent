@@ -25,6 +25,8 @@ const state = {
   selectedKnowledgeNote: null,
   privateSkillDrafts: [],
   selectedPrivateSkillDraft: null,
+  auditLogs: [],
+  auditSummary: null,
   latestReportText: "",
   recognition: null,
 };
@@ -140,6 +142,10 @@ function knowledgeStatusLabel(value) {
 
 function privateSkillStatusLabel(value) {
   return { draft: "草稿", needs_revision: "需修改", approved: "已审核", archived: "已归档" }[value] || value || "草稿";
+}
+
+function yesNo(value) {
+  return value ? "是" : "否";
 }
 
 const GUIDE_STEPS = [
@@ -720,7 +726,7 @@ async function refreshExecutionTasks() {
 
 function renderExecutionWorkspace(plan, batches, tasks) {
   $("executionStatus").textContent = plan ? `${plan.summary?.task_count || tasks.length} 个任务` : "尚未生成";
-  $("exportExecutionLink").href = `/api/projects/${state.project.id}/execution/export.xlsx`;
+  $("exportExecutionLink").href = `/api/projects/${state.project.id}/execution/export.xlsx?mode=redacted`;
   $("exportExecutionLink").classList.remove("disabled-link");
   const batchSelect = $("executionBatchFilter");
   const selected = batchSelect.value;
@@ -793,6 +799,40 @@ async function saveExecutionEvent(taskId, card) {
   });
   if (!data.ok) return alert(data.message || "记录失败");
   await refreshExecutionTasks();
+}
+
+async function createSecurityConfirmation(actionType, confirmationText, extra = {}) {
+  const data = await apiPost("/api/security/confirmations", {
+    project_id: state.project?.id,
+    action_type: actionType,
+    confirmation_text: confirmationText,
+    ...extra,
+  });
+  if (!data.ok) {
+    throw new Error(data.message || "安全确认失败");
+  }
+  return data.confirmation;
+}
+
+async function exportSensitiveExecution() {
+  if (!state.project || !state.executionPlan) return alert("请先生成执行计划");
+  const confirmationText = $("sensitiveExportConfirmText").value.trim();
+  if (confirmationText.length < 6) {
+    $("executionStatus").textContent = "请先填写原文敏感导出确认说明";
+    return;
+  }
+  try {
+    $("executionStatus").textContent = "正在创建导出确认...";
+    const confirmation = await createSecurityConfirmation("original_sensitive_export", confirmationText, {
+      export_mode: "original_sensitive",
+    });
+    const url = `/api/projects/${state.project.id}/execution/export.xlsx?mode=original_sensitive&confirmation_id=${encodeURIComponent(confirmation.id)}`;
+    window.open(url, "_blank", "noopener");
+    $("executionStatus").textContent = "已发起原文敏感导出";
+    await loadAudit();
+  } catch (error) {
+    $("executionStatus").textContent = error.message;
+  }
 }
 
 async function loadKnowledgeNotes() {
@@ -1271,18 +1311,108 @@ async function generateAi() {
   const content = $("aiInput").value.trim() || $("commandInput").value.trim();
   if (!content) return alert("请先输入报告、公告或任务内容");
   $("aiStatus").textContent = "AI 生成中...";
-  const data = await apiPost("/api/ai/generate", {
+  const payload = {
     purpose: $("aiPurpose").value,
     content,
     safety_mode: state.selectedMode,
     project_id: state.project?.id,
-  });
+  };
+  if (state.selectedMode === "original_cloud") {
+    const confirmationText = $("originalCloudConfirmText").value.trim();
+    if (confirmationText.length < 6) {
+      $("aiStatus").textContent = "原文云端分析需要先填写确认说明";
+      return;
+    }
+    try {
+      const confirmation = await createSecurityConfirmation("original_cloud_ai", confirmationText, {
+        purpose: payload.purpose,
+        safety_mode: "original_cloud",
+      });
+      payload.confirm_original_cloud = true;
+      payload.confirmation_id = confirmation.id;
+    } catch (error) {
+      $("aiStatus").textContent = error.message;
+      await loadAudit();
+      return;
+    }
+  }
+  const data = await apiPost("/api/ai/generate", payload);
   if (!data.ok) {
     $("aiStatus").textContent = data.message || "AI 调用失败";
+    await loadAudit();
     return;
   }
   $("aiStatus").textContent = `${data.result.provider} / ${data.result.model}`;
   $("aiOutput").innerHTML = markdownToHtml(data.result.text);
+  await loadAudit();
+}
+
+async function loadAudit() {
+  const [summary, logs] = await Promise.all([apiGet("/api/audit/summary"), apiGet("/api/audit/logs?limit=80")]);
+  if (summary.ok) {
+    state.auditSummary = summary.summary;
+    renderAuditSummary(summary.summary);
+  }
+  if (logs.ok) {
+    state.auditLogs = logs.logs || [];
+    renderAuditLogs(state.auditLogs);
+  }
+}
+
+function renderAuditSummary(summary) {
+  $("auditStatus").textContent = summary.latest_at ? `最近 ${new Date(summary.latest_at).toLocaleString()}` : "暂无审计";
+  $("auditSummary").innerHTML = `
+    <div class="audit-metrics">
+      <span><strong>${summary.total || 0}</strong>审计记录</span>
+      <span><strong>${summary.high_risk_count || 0}</strong>高风险动作</span>
+      <span><strong>${summary.original_cloud_count || 0}</strong>原文云端</span>
+      <span><strong>${summary.original_export_count || 0}</strong>原文导出</span>
+      <span><strong>${summary.network_call_count || 0}</strong>联网动作</span>
+      <span><strong>${summary.memory_write_count || 0}</strong>记忆写入</span>
+    </div>
+  `;
+}
+
+function renderAuditLogs(logs) {
+  const wrap = $("auditLogs");
+  if (!logs.length) {
+    wrap.innerHTML = `<p class="muted-copy">还没有审计记录。上传、解析、模型调用、导出和记忆写入后会出现在这里。</p>`;
+    return;
+  }
+  wrap.innerHTML = "";
+  for (const log of logs) {
+    const event = log.event || {};
+    const card = document.createElement("div");
+    card.className = "audit-card";
+    card.innerHTML = `
+      <div>
+        <strong>${escapeHtml(log.event_type)}</strong>
+        <span>${escapeHtml(new Date(log.created_at).toLocaleString())} · ${escapeHtml(log.project_id || "全局")}</span>
+      </div>
+      <div class="audit-flags">
+        <span>敏感读取：${escapeHtml(yesNo(event.sensitive_data_access))}</span>
+        <span>联网：${escapeHtml(yesNo(event.network_access))}</span>
+        <span>写记忆：${escapeHtml(yesNo(event.memory_write))}</span>
+        <span>导出：${escapeHtml(event.export_mode || "否")}</span>
+        <span>安全模式：${escapeHtml(event.safety_mode || "本地/默认")}</span>
+      </div>
+      <small>${escapeHtml(auditEventSummary(event))}</small>
+    `;
+    wrap.appendChild(card);
+  }
+}
+
+function auditEventSummary(event) {
+  const parts = [];
+  if (event.provider) parts.push(`provider=${event.provider}`);
+  if (event.model) parts.push(`model=${event.model}`);
+  if (event.purpose) parts.push(`用途=${event.purpose}`);
+  if (event.extraction_method) parts.push(`解析=${event.extraction_method}`);
+  if (event.ocr_status) parts.push(`OCR=${event.ocr_status}`);
+  if (event.confirmation_id) parts.push(`确认=${event.confirmation_id}`);
+  if (event.prompt_chars) parts.push(`prompt字符=${event.prompt_chars}`);
+  if (event.response_chars) parts.push(`输出字符=${event.response_chars}`);
+  return parts.join(" · ") || "仅记录动作元数据，不保存完整敏感正文。";
 }
 
 function speakBuiltin(text) {
@@ -1360,6 +1490,7 @@ function bindEvents() {
   $("uploadLegalBtn").onclick = uploadLegalDocument;
   $("runAnalysisBtn").onclick = runAnalysis;
   $("generateExecutionBtn").onclick = generateExecutionPlan;
+  $("exportSensitiveExecutionBtn").onclick = exportSensitiveExecution;
   $("executionBatchFilter").onchange = refreshExecutionTasks;
   $("executionStatusFilter").onchange = refreshExecutionTasks;
   $("executionTierFilter").onchange = refreshExecutionTasks;
@@ -1382,6 +1513,7 @@ function bindEvents() {
   $("parseYindengFileBtn").onclick = parseYindengFile;
   $("saveYindengSubscriptionBtn").onclick = saveYindengSubscription;
   $("generateAiBtn").onclick = generateAi;
+  $("refreshAuditBtn").onclick = loadAudit;
   $("voiceListenBtn").onclick = startVoiceInput;
   $("voiceQuickInputBtn").onclick = startVoiceInput;
   $("readSummaryBtn").onclick = () => speakText(reportSummaryText());
@@ -1452,6 +1584,7 @@ async function init() {
   await loadCourtProfiles();
   await loadKnowledgeNotes();
   await loadPrivateSkillDrafts();
+  await loadAudit();
   renderGuidance();
 }
 

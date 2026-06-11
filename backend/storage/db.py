@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from backend.core.privacy import redact_text
+
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "app.sqlite"
@@ -80,6 +82,14 @@ def init_db() -> None:
               project_id TEXT,
               event_type TEXT NOT NULL,
               event_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS security_confirmations(
+              id TEXT PRIMARY KEY,
+              project_id TEXT,
+              action_type TEXT NOT NULL,
+              confirmation_text TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings(
@@ -1119,10 +1129,101 @@ def update_private_skill_draft(draft_id: str, updates: dict) -> dict | None:
     return current
 
 
+def _redact_audit_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, list):
+        return [_redact_audit_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_audit_value(item) for key, item in value.items()}
+    return value
+
+
 def audit(project_id: str | None, event_type: str, event: dict) -> None:
     record_id = f"audit_{datetime.now(timezone.utc).timestamp():.6f}".replace(".", "_")
+    normalized = {
+        "sensitive_data_access": False,
+        "network_access": False,
+        "memory_write": False,
+        "export_mode": None,
+        "safety_mode": None,
+        "confirmation_id": None,
+        **(event or {}),
+    }
+    safe_event = _redact_audit_value(normalized)
     with connect() as conn:
         conn.execute(
             "INSERT INTO audit_logs(id,project_id,event_type,event_json,created_at) VALUES(?,?,?,?,?)",
-            (record_id, project_id, event_type, json.dumps(event, ensure_ascii=False), now_iso()),
+            (record_id, project_id, event_type, json.dumps(safe_event, ensure_ascii=False), now_iso()),
         )
+
+
+def _audit_row(row: sqlite3.Row) -> dict:
+    data = dict(row)
+    data["event"] = json.loads(data.pop("event_json"))
+    return data
+
+
+def list_audit_logs(project_id: str | None = None, limit: int = 100) -> list[dict]:
+    limit = max(1, min(int(limit or 100), 500))
+    with connect() as conn:
+        if project_id:
+            rows = conn.execute("SELECT * FROM audit_logs WHERE project_id=? ORDER BY created_at DESC LIMIT ?", (project_id, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [_audit_row(row) for row in rows]
+
+
+def audit_summary() -> dict:
+    logs = list_audit_logs(limit=500)
+    original_cloud = 0
+    original_export = 0
+    high_risk = 0
+    memory_writes = 0
+    network_calls = 0
+    for row in logs:
+        event = row.get("event", {})
+        if event.get("safety_mode") == "original_cloud":
+            original_cloud += 1
+        if event.get("export_mode") == "original_sensitive":
+            original_export += 1
+        if event.get("memory_write"):
+            memory_writes += 1
+        if event.get("network_access"):
+            network_calls += 1
+        if event.get("confirmation_id") or event.get("safety_mode") == "original_cloud" or event.get("export_mode") == "original_sensitive":
+            high_risk += 1
+    return {
+        "total": len(logs),
+        "high_risk_count": high_risk,
+        "original_cloud_count": original_cloud,
+        "original_export_count": original_export,
+        "memory_write_count": memory_writes,
+        "network_call_count": network_calls,
+        "latest_at": logs[0]["created_at"] if logs else None,
+    }
+
+
+def insert_security_confirmation(record: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO security_confirmations(id,project_id,action_type,confirmation_text,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+            (
+                record["id"],
+                record.get("project_id"),
+                record["action_type"],
+                redact_text(record.get("confirmation_text", "")),
+                json.dumps(_redact_audit_value(record.get("payload", {})), ensure_ascii=False),
+                record["created_at"],
+            ),
+        )
+
+
+def get_security_confirmation(confirmation_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM security_confirmations WHERE id=?", (confirmation_id,)).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["payload"] = json.loads(data.pop("payload_json"))
+        return data

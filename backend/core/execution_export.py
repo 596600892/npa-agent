@@ -7,6 +7,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 
 EXPORT_HEADERS = [
+    "导出模式",
     "批次",
     "层级",
     "优先级",
@@ -25,7 +26,7 @@ EXPORT_HEADERS = [
 ]
 
 
-def build_execution_export(tasks: list[dict]) -> bytes:
+def build_execution_export(tasks: list[dict], mode: str = "redacted") -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "执行清单"
@@ -38,6 +39,7 @@ def build_execution_export(tasks: list[dict]) -> bytes:
     for task in tasks:
         ws.append(
             [
+                "原文敏感" if mode == "original_sensitive" else "脱敏",
                 task.get("batch_name"),
                 task.get("tier"),
                 task.get("priority_score"),
@@ -56,6 +58,7 @@ def build_execution_export(tasks: list[dict]) -> bytes:
             ]
         )
     widths = [18, 8, 10, 14, 14, 12, 24, 14, 14, 14, 18, 48, 14, 18, 28]
+    widths = [12, *widths]
     for index, width in enumerate(widths, start=1):
         ws.column_dimensions[chr(64 + index)].width = width
     for row in ws.iter_rows(min_row=2):

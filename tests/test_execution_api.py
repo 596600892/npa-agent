@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+import urllib.error
 from io import BytesIO
 from pathlib import Path
 
@@ -54,6 +55,23 @@ class ExecutionApiTests(unittest.TestCase):
             if resp.headers.get_content_type() == "application/json":
                 return json.loads(body.decode("utf-8"))
             return body
+
+    def request_error(self, method, path, payload=None):
+        data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                return json.loads(exc.read().decode("utf-8"))
+            finally:
+                exc.close()
 
     def post(self, path, payload):
         return self.request("POST", path, payload)
@@ -103,6 +121,7 @@ class ExecutionApiTests(unittest.TestCase):
         wb = load_workbook(BytesIO(exported), read_only=True)
         ws = wb["执行清单"]
         headers = [cell.value for cell in next(ws.iter_rows(max_row=1))]
+        self.assertIn("导出模式", headers)
         self.assertIn("批次", headers)
         self.assertIn("合规话术", headers)
         text = "\n".join(str(cell.value or "") for row in ws.iter_rows() for cell in row)
@@ -112,6 +131,33 @@ class ExecutionApiTests(unittest.TestCase):
         rerun = self.post(f"/api/projects/{project['id']}/analysis/run", {"analysis_type": "consumer_loan_initial_screening"})
         self.assertIn("处置执行计划", rerun["report"]["markdown"])
         self.assertIn("已生成执行任务", rerun["report"]["markdown"])
+
+    def test_original_sensitive_export_requires_confirmation_and_is_audited(self):
+        project = self.create_analyzed_project()
+        self.post(f"/api/projects/{project['id']}/execution/plan", {})
+        denied = self.request_error("GET", f"/api/projects/{project['id']}/execution/export.xlsx?mode=original_sensitive")
+        self.assertFalse(denied["ok"])
+        self.assertEqual(denied["code"], "sensitive_export_not_confirmed")
+        confirmation = self.post(
+            "/api/security/confirmations",
+            {
+                "project_id": project["id"],
+                "action_type": "original_sensitive_export",
+                "confirmation_text": "我确认本次原文敏感导出",
+                "export_mode": "original_sensitive",
+            },
+        )["confirmation"]
+        exported = self.request("GET", f"/api/projects/{project['id']}/execution/export.xlsx?mode=original_sensitive&confirmation_id={confirmation['id']}")
+        wb = load_workbook(BytesIO(exported), read_only=True)
+        ws = wb["执行清单"]
+        values = [cell.value for cell in next(ws.iter_rows(min_row=2, max_row=2))]
+        self.assertIn("原文敏感", values)
+        logs = self.get("/api/audit/logs?limit=20")["logs"]
+        blob = json.dumps(logs, ensure_ascii=False)
+        self.assertIn("execution_exported", blob)
+        self.assertIn("original_sensitive", blob)
+        summary = self.get("/api/audit/summary")["summary"]
+        self.assertGreaterEqual(summary["original_export_count"], 1)
 
 
 if __name__ == "__main__":

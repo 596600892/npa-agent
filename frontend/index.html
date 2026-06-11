@@ -204,6 +204,11 @@
             <button id="fetchYindengBtn" class="primary-button">抓取并解析公告</button>
             <textarea id="yindengText" rows="5" placeholder="URL 抓取失败时，也可以粘贴公告正文解析"></textarea>
             <button id="parseYindengTextBtn" class="text-button">解析粘贴正文</button>
+            <div class="inline-form">
+              <input id="yindengKeyword" type="text" placeholder="订阅关键词，例如 广东、消费贷、个人不良" />
+              <button id="saveYindengSubscriptionBtn" class="text-button">订阅关键词</button>
+            </div>
+            <div id="yindengAlerts" class="notice-list"></div>
             <div id="yindengList" class="notice-list"></div>
           </div>
 

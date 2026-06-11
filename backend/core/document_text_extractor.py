@@ -15,7 +15,7 @@ class DocumentExtractionError(Exception):
 class ExtractedDocumentText:
     text: str
     file_type: str
-    parser_version: str = "document_text_extractor_v0.1"
+    parser_version: str = "document_text_extractor_v0.2"
     page_count: int | None = None
     text_quality: str = "empty"
     warnings: list[str] = field(default_factory=list)
@@ -117,7 +117,39 @@ def _extract_pdf(path: Path) -> ExtractedDocumentText:
     text = _normalize_text("\n".join(chunks))
     if not text.strip():
         warnings.append("needs_ocr")
+        ocr_text, ocr_warnings = _extract_pdf_ocr_optional(path)
+        warnings.extend(ocr_warnings)
+        if ocr_text.strip():
+            text = _normalize_text(ocr_text)
+            warnings.append("ocr_applied")
     return ExtractedDocumentText(text=text, file_type="pdf", page_count=len(reader.pages), text_quality=_quality(text, warnings), warnings=warnings)
+
+
+def _extract_pdf_ocr_optional(path: Path) -> tuple[str, list[str]]:
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+    except ImportError:
+        return "", ["ocr_unavailable"]
+
+    try:
+        pages = convert_from_path(str(path), first_page=1, last_page=3)
+    except Exception:
+        return "", ["ocr_render_failed"]
+
+    chunks: list[str] = []
+    warnings = ["ocr_attempted"]
+    for page in pages:
+        try:
+            page_text = pytesseract.image_to_string(page, lang="chi_sim+eng")
+        except Exception:
+            page_text = ""
+            warnings.append("ocr_page_failed")
+        if page_text.strip():
+            chunks.append(page_text.strip())
+    if not chunks:
+        warnings.append("ocr_empty")
+    return "\n".join(chunks), warnings
 
 
 def _normalize_text(text: str) -> str:

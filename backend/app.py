@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -114,6 +114,42 @@ def yindeng_notice_record(parsed, raw_text: str, source_id: str | None, source_u
         "confidence": parsed.confidence,
         "created_at": now_iso(),
     }
+
+
+def save_yindeng_notice_with_alerts(preliminary, raw_text: str, source_id: str, source_url: str | None, raw_sha256: str) -> tuple[dict, bool, list[dict]]:
+    existing = db.find_yindeng_notice_by_raw_sha(raw_sha256)
+    if existing:
+        return existing, True, []
+    notice = yindeng_notice_record(preliminary, raw_text, source_id, source_url)
+    db.insert_yindeng_notice(notice)
+    alerts = create_yindeng_alerts(notice)
+    return notice, False, alerts
+
+
+def create_yindeng_alerts(notice: dict) -> list[dict]:
+    text = " ".join(
+        [
+            notice.get("title") or "",
+            notice.get("transferor") or "",
+            notice.get("asset_type") or "",
+            " ".join(notice.get("regions") or []),
+            notice.get("raw_text") or "",
+        ]
+    )
+    alerts: list[dict] = []
+    for subscription in db.list_yindeng_subscriptions(enabled_only=True):
+        keyword = subscription.get("keyword", "").strip()
+        if keyword and keyword in text:
+            alert = {
+                "id": make_id("yndalert"),
+                "subscription_id": subscription["id"],
+                "notice_id": notice["id"],
+                "keyword": keyword,
+                "created_at": now_iso(),
+            }
+            db.insert_yindeng_alert(alert)
+            alerts.append(alert)
+    return alerts
 
 
 def default_model_setting() -> dict:
@@ -266,6 +302,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"ok": True, "providers": voice_provider_options()})
             if parsed.path == "/api/intelligence/yindeng/notices":
                 return self._send_json(200, {"ok": True, "notices": db.list_yindeng_notices()})
+            if parsed.path == "/api/intelligence/yindeng/subscriptions":
+                return self._send_json(200, {"ok": True, "subscriptions": db.list_yindeng_subscriptions()})
+            if parsed.path == "/api/intelligence/yindeng/alerts":
+                return self._send_json(200, {"ok": True, "alerts": db.list_yindeng_alerts()})
             if parsed.path == "/api/company-history/records":
                 return self._send_json(200, {"ok": True, "records": db.list_company_history_records()})
             if parsed.path == "/api/courts/profiles":
@@ -674,7 +714,7 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/model/test":
                 payload = self._read_json()
                 result = test_model_config(payload or None)
-                return self._send_json(200, {"ok": True, "result": {"text": result.text, "provider": result.provider, "model": result.model, "redacted": result.redacted}})
+                return self._send_json(200, {"ok": True, "result": {"text": result.text, "provider": result.provider, "model": result.model, "redacted": result.redacted, "prompt_audit": result.prompt_audit, "recommended_model": result.recommended_model, "next_actions": ["save_model_config", "use_for_ai_assist"]}})
             if parsed.path == "/api/settings/voice":
                 payload = self._read_json()
                 stored = db.set_setting("voice", payload)
@@ -755,10 +795,9 @@ class Handler(BaseHTTPRequestHandler):
                         "created_at": now_iso(),
                     }
                 )
-                notice = yindeng_notice_record(preliminary, fetched.raw_text, source_id, fetched.url)
-                db.insert_yindeng_notice(notice)
-                db.audit(None, "yindeng_notice_fetched", {"notice_id": notice["id"], "source_url": fetched.url, "sha256": fetched.raw_sha256, "confidence": notice["confidence"]})
-                return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "next_actions": ["review_notice", "create_project", "paste_notice_text_if_low_confidence"]})
+                notice, duplicate, alerts = save_yindeng_notice_with_alerts(preliminary, fetched.raw_text, source_id, fetched.url, fetched.raw_sha256)
+                db.audit(None, "yindeng_notice_fetched", {"notice_id": notice["id"], "source_url": fetched.url, "sha256": fetched.raw_sha256, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts)})
+                return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "duplicate": duplicate, "alerts": alerts, "next_actions": ["review_notice", "create_project", "paste_notice_text_if_low_confidence"]})
 
             if parsed.path == "/api/intelligence/yindeng/parse":
                 payload = self._read_json()
@@ -780,9 +819,19 @@ class Handler(BaseHTTPRequestHandler):
                         "created_at": now_iso(),
                     }
                 )
-                notice = yindeng_notice_record(preliminary, raw_text, source_id, payload.get("source_url"))
-                db.insert_yindeng_notice(notice)
-                return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "next_actions": ["review_notice", "create_project"]})
+                notice, duplicate, alerts = save_yindeng_notice_with_alerts(preliminary, raw_text, source_id, payload.get("source_url"), raw_sha256)
+                db.audit(None, "yindeng_notice_parsed", {"notice_id": notice["id"], "source_url": payload.get("source_url"), "sha256": raw_sha256, "confidence": notice["confidence"], "duplicate": duplicate, "alert_count": len(alerts)})
+                return self._send_json(200, {"ok": True, "source_id": source_id, "notice": json_safe(notice), "duplicate": duplicate, "alerts": alerts, "next_actions": ["review_notice", "create_project"]})
+
+            if parsed.path == "/api/intelligence/yindeng/subscriptions":
+                payload = self._read_json()
+                keyword = (payload.get("keyword") or "").strip()
+                if not keyword:
+                    return self._error(400, "missing_keyword", "请填写订阅关键词。", ["enter_keyword"])
+                record = {"id": make_id("yndsub"), "keyword": keyword, "enabled": payload.get("enabled", True), "created_at": now_iso()}
+                db.insert_yindeng_subscription(record)
+                db.audit(None, "yindeng_subscription_created", {"subscription_id": record["id"], "keyword": keyword, "enabled": record["enabled"]})
+                return self._send_json(200, {"ok": True, "subscription": record, "next_actions": ["parse_yindeng_notice", "review_yindeng_alerts"]})
 
             match = re.fullmatch(r"/api/intelligence/yindeng/notices/([^/]+)/create-project", parsed.path)
             if match:
@@ -824,7 +873,7 @@ class Handler(BaseHTTPRequestHandler):
                             "created_at": now_iso(),
                         }
                     )
-                    return self._send_json(200, {"ok": True, "result": {"text": result.text, "provider": result.provider, "model": result.model, "redacted": result.redacted}})
+                    return self._send_json(200, {"ok": True, "result": {"text": result.text, "provider": result.provider, "model": result.model, "redacted": result.redacted, "prompt_audit": result.prompt_audit, "recommended_model": result.recommended_model, "next_actions": ["review_prompt_audit", "save_result_if_useful"]}})
                 except ModelGatewayError as exc:
                     db.insert_model_call(
                         {
@@ -841,7 +890,7 @@ class Handler(BaseHTTPRequestHandler):
                             "created_at": now_iso(),
                         }
                     )
-                    return self._error(400, exc.code, exc.message, ["configure_model", "use_local_rules"])
+                    return self._error(400, exc.code, exc.message, ["configure_model", "check_provider_base_url", "use_local_rules"])
 
             if parsed.path == "/api/voice/tts":
                 payload = self._read_json()
@@ -921,7 +970,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{path.name}")
+        encoded_name = quote(path.name)
+        fallback_name = f"download{path.suffix or '.bin'}"
+        self.send_header("Content-Disposition", f"attachment; filename=\"{fallback_name}\"; filename*=UTF-8''{encoded_name}")
         self.end_headers()
         self.wfile.write(body)
 

@@ -121,6 +121,21 @@ class NextStageTests(unittest.TestCase):
         notices = self.get("/api/intelligence/yindeng/notices")
         self.assertGreaterEqual(len(notices["notices"]), 1)
 
+    def test_yindeng_keyword_subscription_alert_and_duplicate_detection(self):
+        subscription = self.post("/api/intelligence/yindeng/subscriptions", {"keyword": "广东"})
+        self.assertTrue(subscription["ok"])
+        parsed = self.post("/api/intelligence/yindeng/parse", {"text": NOTICE_TEXT, "source_type": "manual_text"})
+        self.assertTrue(parsed["ok"])
+        self.assertFalse(parsed["duplicate"])
+        self.assertGreaterEqual(len(parsed["alerts"]), 1)
+        duplicate = self.post("/api/intelligence/yindeng/parse", {"text": NOTICE_TEXT, "source_type": "manual_text"})
+        self.assertTrue(duplicate["ok"])
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["notice"]["id"], parsed["notice"]["id"])
+        alerts = self.get("/api/intelligence/yindeng/alerts")
+        self.assertGreaterEqual(len(alerts["alerts"]), 1)
+        self.assertIn("广东", [item["keyword"] for item in alerts["alerts"]])
+
     def test_model_gateway_redacts_sensitive_prompt_and_hides_key(self):
         saved = self.post(
             "/api/settings/model",
@@ -143,10 +158,20 @@ class NextStageTests(unittest.TestCase):
         )
         self.assertTrue(generated["ok"])
         self.assertIn("脱敏", generated["result"]["text"])
+        self.assertIn("prompt_audit", generated["result"])
+        self.assertTrue(generated["result"]["prompt_audit"]["redacted"])
+        self.assertFalse(generated["result"]["prompt_audit"]["contains_phone_after_redaction"])
+        self.assertIn("recommended_model", generated["result"])
         self.assertNotIn("440305199001011234", FakeModelHandler.captured)
         self.assertNotIn("13812345678", FakeModelHandler.captured)
         loaded = self.get("/api/settings/model")
         self.assertNotIn("sk-local-secret", json.dumps(loaded, ensure_ascii=False))
+
+    def test_model_provider_options_include_recommendation_metadata(self):
+        providers = self.get("/api/settings/model/providers")
+        self.assertTrue(providers["ok"])
+        deepseek = next(item for item in providers["providers"] if item["id"] == "deepseek")
+        self.assertIn("report_summary", deepseek["recommended_purposes"])
 
     def test_voice_tts_without_key_returns_actionable_error(self):
         db.set_setting("voice", {"mode": "enhanced", "enhanced_enabled": True, "tts_provider": "openai_compatible_tts"})
@@ -154,6 +179,14 @@ class NextStageTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "voice_not_configured")
         self.assertIn("use_builtin_browser_voice", result["next_actions"])
+
+    def test_voice_providers_include_fallback_status(self):
+        providers = self.get("/api/settings/voice/providers")
+        self.assertTrue(providers["ok"])
+        browser = next(item for item in providers["providers"] if item["id"] == "builtin_browser")
+        enhanced = next(item for item in providers["providers"] if item["id"] == "openai_compatible_tts")
+        self.assertEqual(browser["status"], "available")
+        self.assertIn(enhanced["status"], {"needs_key", "configured"})
 
 
 if __name__ == "__main__":

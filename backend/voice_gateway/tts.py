@@ -55,7 +55,20 @@ class TTSResponse:
 
 
 def voice_provider_options() -> list[dict]:
-    return VOICE_PROVIDERS
+    setting = db.get_setting("voice", {})
+    configured = bool(setting.get("tts_api_key_present") or db.get_secret("voice", "tts_api_key") or db.get_secret("voice", "voice_api_key"))
+    providers = []
+    for provider in VOICE_PROVIDERS:
+        status = "available"
+        message = "可直接使用浏览器本地能力。"
+        if provider["mode"] == "enhanced":
+            status = "configured" if configured else "needs_key"
+            message = "已配置增强 TTS。" if configured else "需要配置兼容 TTS API Key；未配置时使用浏览器自带语音。"
+        if provider["mode"] == "reserved":
+            status = "reserved"
+            message = "预留 provider，当前版本不直接调用。"
+        providers.append({**provider, "status": status, "message": message})
+    return providers
 
 
 def resolve_voice_config(override: dict | None = None) -> dict:

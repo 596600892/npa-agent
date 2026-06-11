@@ -125,6 +125,19 @@ def init_db() -> None:
               confidence TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS yindeng_subscriptions(
+              id TEXT PRIMARY KEY,
+              keyword TEXT NOT NULL,
+              enabled INTEGER NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS yindeng_alerts(
+              id TEXT PRIMARY KEY,
+              subscription_id TEXT NOT NULL,
+              notice_id TEXT NOT NULL,
+              keyword TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS model_calls(
               id TEXT PRIMARY KEY,
               project_id TEXT,
@@ -495,6 +508,21 @@ def insert_yindeng_notice(record: dict) -> None:
         )
 
 
+def find_yindeng_notice_by_raw_sha(raw_sha256: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT n.* FROM yindeng_notices n
+            JOIN intelligence_sources s ON s.id = n.source_id
+            WHERE s.raw_sha256=?
+            ORDER BY n.created_at DESC
+            LIMIT 1
+            """,
+            (raw_sha256,),
+        ).fetchone()
+        return _notice_row(row) if row else None
+
+
 def _notice_row(row: sqlite3.Row) -> dict:
     data = dict(row)
     data["regions"] = json.loads(data.pop("regions_json"))
@@ -514,6 +542,47 @@ def get_yindeng_notice(notice_id: str) -> dict | None:
     with connect() as conn:
         row = conn.execute("SELECT * FROM yindeng_notices WHERE id=?", (notice_id,)).fetchone()
         return _notice_row(row) if row else None
+
+
+def insert_yindeng_subscription(record: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO yindeng_subscriptions(id,keyword,enabled,created_at) VALUES(?,?,?,?)",
+            (record["id"], record["keyword"], 1 if record.get("enabled", True) else 0, record["created_at"]),
+        )
+
+
+def list_yindeng_subscriptions(enabled_only: bool = False) -> list[dict]:
+    query = "SELECT * FROM yindeng_subscriptions"
+    params: tuple = ()
+    if enabled_only:
+        query += " WHERE enabled=1"
+    query += " ORDER BY created_at DESC"
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(row) | {"enabled": bool(row["enabled"])} for row in rows]
+
+
+def insert_yindeng_alert(record: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO yindeng_alerts(id,subscription_id,notice_id,keyword,created_at) VALUES(?,?,?,?,?)",
+            (record["id"], record["subscription_id"], record["notice_id"], record["keyword"], record["created_at"]),
+        )
+
+
+def list_yindeng_alerts() -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.*, n.title, n.asset_type, n.principal, n.debtor_count, n.source_url
+            FROM yindeng_alerts a
+            JOIN yindeng_notices n ON n.id = a.notice_id
+            ORDER BY a.created_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def insert_model_call(record: dict) -> None:

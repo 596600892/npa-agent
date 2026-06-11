@@ -55,6 +55,7 @@ class DocumentTextExtractorTests(unittest.TestCase):
             self.assertEqual(result.file_type, "pdf")
             self.assertEqual(result.text_quality, "empty")
             self.assertIn("needs_ocr", result.warnings)
+            self.assertTrue({"ocr_unavailable", "ocr_attempted"} & set(result.warnings))
         finally:
             os.unlink(path)
 

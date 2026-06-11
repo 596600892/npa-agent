@@ -18,6 +18,8 @@ const state = {
   selectedMode: "redacted_cloud",
   modelProviders: [],
   voiceProviders: [],
+  yindengSubscriptions: [],
+  yindengAlerts: [],
   knowledgeNotes: [],
   selectedKnowledgeNote: null,
   privateSkillDrafts: [],
@@ -480,11 +482,21 @@ function renderLegalRisk(risk) {
   }
   const sections = Object.values(risk.risks || {});
   const nextActions = (risk.next_actions || []).slice(0, 3).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const judicial = risk.judicial_analysis;
+  const judicialHtml = judicial
+    ? `
+      <div class="risk-summary secondary">
+        <strong>${escapeHtml(documentTypeLabel(risk.document_type))}线索</strong>
+        <span>裁判 ${judicial.adjudication_points?.length || 0} · 执行 ${judicial.execution_statuses?.length || 0} · 调解 ${judicial.mediation_terms?.length || 0} · 金额 ${judicial.amounts?.length || 0}</span>
+      </div>
+    `
+    : "";
   wrap.innerHTML = `
     <div class="risk-summary">
       <strong>整体风险：${escapeHtml(riskLabel(risk.overall_risk))}</strong>
-      <span>可信度 ${escapeHtml(risk.confidence)} · 文本质量 ${escapeHtml(risk.text_quality)} · ${escapeHtml(risk.filename || "合同/文书")}</span>
+      <span>${escapeHtml(documentTypeLabel(risk.document_type))} · 可信度 ${escapeHtml(risk.confidence)} · 文本质量 ${escapeHtml(risk.text_quality)} · ${escapeHtml(risk.filename || "合同/文书")}</span>
     </div>
+    ${judicialHtml}
     <div class="risk-card-grid">
       ${sections
         .map(
@@ -500,6 +512,16 @@ function renderLegalRisk(risk) {
     </div>
     <ul class="risk-next">${nextActions}</ul>
   `;
+}
+
+function documentTypeLabel(value) {
+  return {
+    contract: "合同/条款",
+    judgment: "判决书",
+    enforcement: "执行文书",
+    mediation: "调解文书",
+    unknown: "未识别文书",
+  }[value || "unknown"] || value || "未识别文书";
 }
 
 async function uploadHistoryFile() {
@@ -1007,8 +1029,17 @@ async function loadHealth() {
 }
 
 async function loadYindengNotices() {
-  const data = await apiGet("/api/intelligence/yindeng/notices");
-  if (data.ok) renderYindengList(data.notices || []);
+  const [notices, subscriptions, alerts] = await Promise.all([
+    apiGet("/api/intelligence/yindeng/notices"),
+    apiGet("/api/intelligence/yindeng/subscriptions"),
+    apiGet("/api/intelligence/yindeng/alerts"),
+  ]);
+  if (subscriptions.ok) state.yindengSubscriptions = subscriptions.subscriptions || [];
+  if (alerts.ok) {
+    state.yindengAlerts = alerts.alerts || [];
+    renderYindengAlerts(state.yindengAlerts);
+  }
+  if (notices.ok) renderYindengList(notices.notices || []);
 }
 
 async function loadHistoryRecords() {
@@ -1082,7 +1113,7 @@ function renderYindengList(notices) {
     card.className = "notice-card";
     card.innerHTML = `
       <strong>${escapeHtml(notice.title)}</strong>
-      <span>置信度 ${escapeHtml(notice.confidence)} · ${escapeHtml(notice.asset_type || "unknown")}</span>
+      <span>置信度 ${escapeHtml(notice.confidence)} · ${escapeHtml(notice.asset_type || "unknown")} · 附件 ${(notice.attachments || []).length}</span>
       <span>本金 ${escapeHtml(money(notice.principal))} · 户数 ${escapeHtml(notice.debtor_count ?? "未识别")}</span>
       <span>地区 ${(notice.regions || []).map(escapeHtml).join("、") || "未识别"}</span>
       <button class="text-button" data-notice-id="${escapeHtml(notice.id)}">生成项目</button>
@@ -1090,6 +1121,39 @@ function renderYindengList(notices) {
     card.querySelector("button").onclick = () => createProjectFromNotice(notice.id);
     list.appendChild(card);
   }
+}
+
+function renderYindengAlerts(alerts) {
+  const wrap = $("yindengAlerts");
+  if (!wrap) return;
+  if (!alerts.length) {
+    wrap.innerHTML = `<p class="muted-copy">暂无关键词命中提醒。</p>`;
+    return;
+  }
+  wrap.innerHTML = `<h3>本地提醒</h3>`;
+  for (const alert of alerts.slice(0, 5)) {
+    const card = document.createElement("div");
+    card.className = "notice-card compact";
+    card.innerHTML = `
+      <strong>${escapeHtml(alert.keyword)} 命中</strong>
+      <span>${escapeHtml(alert.title || "银登公告")}</span>
+      <span>本金 ${escapeHtml(money(alert.principal))} · 户数 ${escapeHtml(alert.debtor_count ?? "未识别")}</span>
+    `;
+    wrap.appendChild(card);
+  }
+}
+
+async function saveYindengSubscription() {
+  const keyword = $("yindengKeyword").value.trim();
+  if (!keyword) return alert("请先填写订阅关键词");
+  const data = await apiPost("/api/intelligence/yindeng/subscriptions", { keyword, enabled: true });
+  if (!data.ok) {
+    $("yindengStatus").textContent = data.message || "订阅失败";
+    return;
+  }
+  $("yindengKeyword").value = "";
+  $("yindengStatus").textContent = `已订阅：${keyword}`;
+  await loadYindengNotices();
 }
 
 async function fetchYindeng() {
@@ -1250,6 +1314,7 @@ function bindEvents() {
   $("saveVoiceBtn").onclick = saveVoice;
   $("fetchYindengBtn").onclick = fetchYindeng;
   $("parseYindengTextBtn").onclick = parseYindengText;
+  $("saveYindengSubscriptionBtn").onclick = saveYindengSubscription;
   $("generateAiBtn").onclick = generateAi;
   $("voiceListenBtn").onclick = startVoiceInput;
   $("voiceQuickInputBtn").onclick = startVoiceInput;

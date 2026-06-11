@@ -48,10 +48,35 @@ class ModelResponse:
     prompt_chars: int
     response_chars: int
     redacted: bool
+    purpose: str = "general"
+    prompt_audit: dict | None = None
+    recommended_model: dict | None = None
 
 
 def provider_options() -> list[dict]:
-    return list(PROVIDERS.values())
+    return [{**item, "recommended_purposes": recommended_purposes_for_provider(item["id"])} for item in PROVIDERS.values()]
+
+
+def recommended_purposes_for_provider(provider_id: str) -> list[str]:
+    if provider_id == "deepseek":
+        return ["report_summary", "phone_script", "general"]
+    if provider_id == "qwen":
+        return ["yindeng_summary", "report_summary", "general"]
+    return ["general", "report_summary", "phone_script", "yindeng_summary"]
+
+
+def recommend_model_for_purpose(purpose: str, provider_id: str | None = None) -> dict:
+    if provider_id and provider_id in PROVIDERS:
+        provider = PROVIDERS[provider_id]
+    elif purpose == "yindeng_summary":
+        provider = PROVIDERS["qwen"]
+    else:
+        provider = PROVIDERS["deepseek"]
+    return {
+        "provider": provider["id"],
+        "model": provider["default_model"] or "manual",
+        "reason": "按用途推荐；用户配置优先，推荐仅作为默认选择。",
+    }
 
 
 def redact_sensitive_text(text: str) -> str:
@@ -100,6 +125,18 @@ def purpose_prompt(purpose: str, content: str) -> str:
     return f"{instruction}\n\n资料：\n{content}"
 
 
+def prompt_audit_summary(purpose: str, original_content: str, safe_content: str, redacted: bool) -> dict:
+    return {
+        "purpose": purpose,
+        "redacted": redacted,
+        "original_chars": len(original_content),
+        "sent_chars": len(safe_content),
+        "contains_phone_after_redaction": bool(re.search(r"(?<!\d)1[3-9]\d{9}(?!\d)", safe_content)),
+        "contains_id_card_after_redaction": bool(re.search(r"(?<!\d)\d{6}(?:19|20)\d{2}\d{2}\d{2}\d{3}[\dXx](?!\d)", safe_content)),
+        "sensitive_policy": "redacted_cloud" if redacted else "original_cloud_confirmed",
+    }
+
+
 def chat_completion(config: dict, prompt: str, timeout: int = 40) -> str:
     endpoint = f"{config['base_url']}/chat/completions"
     body = json.dumps(
@@ -146,6 +183,9 @@ def generate_text(purpose: str, content: str, safety_mode: str | None = None, pr
         prompt_chars=len(prompt),
         response_chars=len(text),
         redacted=redacted,
+        purpose=purpose,
+        prompt_audit=prompt_audit_summary(purpose, content, safe_content, redacted),
+        recommended_model=recommend_model_for_purpose(purpose, config["provider"]),
     )
 
 

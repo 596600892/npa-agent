@@ -33,6 +33,16 @@ def _risk_label(value: str | None) -> str:
     return {"low": "低", "medium": "中", "high": "高", "unknown": "未知", "not_analyzed": "未分析"}.get(value or "", value or "未分析")
 
 
+def _document_type_label(value: str | None) -> str:
+    return {
+        "contract": "合同/条款",
+        "judgment": "判决书",
+        "enforcement": "执行文书",
+        "mediation": "调解文书",
+        "unknown": "未识别",
+    }.get(value or "unknown", value or "未识别")
+
+
 def write_report(
     project: dict,
     quality: dict,
@@ -151,6 +161,7 @@ def write_report(
         lines.append(f"**整体风险：{_risk_label(legal_risk.get('overall_risk'))}；可信度：{legal_risk.get('confidence', 'low')}；文本质量：{legal_risk.get('text_quality', 'unknown')}。**")
         lines.append("")
         lines.append(f"来源文件：{legal_risk.get('filename') or '合同/文书'}")
+        lines.append(f"文书类型：{_document_type_label(legal_risk.get('document_type'))}")
         warnings = "、".join(legal_risk.get("warnings", [])) or "无"
         lines.append(f"解析提示：{warnings}")
         lines.append("")
@@ -168,6 +179,16 @@ def write_report(
         lines.append(f"- 管辖法院：{courts}。")
         lines.append(f"- 仲裁机构：{arbitration}。")
         lines.append(f"- 日期线索：{dates}。")
+        judicial = legal_risk.get("judicial_analysis") or {}
+        if judicial:
+            points = "；".join(judicial.get("adjudication_points", [])[:2]) or "未识别"
+            statuses = "；".join(judicial.get("execution_statuses", [])[:2]) or "未识别"
+            terms = "；".join(judicial.get("mediation_terms", [])[:2]) or "未识别"
+            amounts = "、".join(judicial.get("amounts", [])[:6]) or "未识别"
+            lines.append(f"- 裁判要点：{points}。")
+            lines.append(f"- 执行状态：{statuses}。")
+            lines.append(f"- 调解履行：{terms}。")
+            lines.append(f"- 金额线索：{amounts}。")
         lines.append("")
         lines.append("合同/文书下一步：")
         for action in legal_risk.get("next_actions", [])[:5]:

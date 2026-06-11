@@ -513,6 +513,17 @@ textarea {
   color: var(--muted);
 }
 
+.notice-card.compact {
+  padding: 8px 10px;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
 .court-card {
   display: grid;
   gap: 8px;
@@ -556,6 +567,11 @@ textarea {
   background: #fbfcf8;
   border-radius: 6px;
   padding: 10px 12px;
+}
+
+.risk-summary.secondary {
+  border-left-color: var(--teal-2);
+  background: #f7fafc;
 }
 
 .risk-summary span,

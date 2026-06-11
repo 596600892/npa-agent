@@ -1,0 +1,15 @@
+name: privacy_anonymizer
+version: "0.1"
+risk_level: low
+description: "脱敏姓名、身份证、手机号和地址"
+required_inputs:
+  - sensitive_fields
+permissions:
+  read_local_files: false
+  write_project_record: false
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: true
+outputs:
+  - redacted_fields

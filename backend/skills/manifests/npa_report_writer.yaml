@@ -1,0 +1,15 @@
+name: npa_report_writer
+version: "0.1"
+risk_level: medium
+description: "生成结论摘要、详细分析、报价建议和数据来源说明"
+required_inputs:
+  - analysis_result
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: false
+outputs:
+  - markdown_report

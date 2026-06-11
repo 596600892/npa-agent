@@ -1,0 +1,24 @@
+name: phone_mediation_strategy
+version: "0.1"
+risk_level: medium
+description: "生成电话调解分层、合规话术和下一步流转建议"
+required_inputs:
+  - normalized_loan_accounts
+  - principal
+optional_inputs:
+  - id_card
+  - phone
+  - address
+  - court_profile
+  - company_history
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: true
+outputs:
+  - mediation_tiers
+  - compliant_script
+  - forbidden_phrases

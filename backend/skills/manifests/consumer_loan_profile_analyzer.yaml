@@ -1,0 +1,17 @@
+name: consumer_loan_profile_analyzer
+version: "0.1"
+risk_level: medium
+description: "分析个贷/消费贷资产包的人群画像、金额结构和触达完整度"
+required_inputs:
+  - normalized_loan_accounts
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: true
+outputs:
+  - debtor_profile
+  - amount_distribution
+  - contact_coverage

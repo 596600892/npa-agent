@@ -1,0 +1,27 @@
+name: execution_plan_builder
+display_name: 处置执行计划生成
+risk_level: medium
+description: 基于标准化资产包、处置分层、合同风险和法院画像生成轻量执行计划、批次和任务优先级。
+required_inputs:
+  - loan_accounts
+  - disposition_tiers
+optional_inputs:
+  - legal_risk
+  - court_profile
+  - company_history
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: true
+outputs:
+  - execution_plan
+  - execution_batches
+  - execution_tasks
+missing_input_prompts:
+  loan_accounts: "请先上传资产包 Excel 并确认字段映射，系统才能生成处置执行计划。"
+safety_notes:
+  - "默认只输出脱敏执行任务。"
+  - "不接入自动外呼、短信或真实催收系统。"

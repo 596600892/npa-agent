@@ -1,0 +1,26 @@
+name: company_preference_memory
+display_name: 公司偏好记忆
+risk_level: medium
+description: 保存公司报告格式、报价假设、偏好地区和处置策略偏好；未确认内容先作为待确认记忆。
+required_inputs:
+  - title
+  - content
+optional_inputs:
+  - preference_type
+  - source_project
+  - confirmed
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: true
+  write_memory: true
+  access_sensitive_data: false
+outputs:
+  - company_preference_note
+missing_input_prompts:
+  title: "请给这条偏好一个短标题，方便后续搜索和复盘。"
+  content: "请填写偏好内容；如果还没有确认，我会先放入待确认记忆。"
+safety_notes:
+  - "未勾选人工确认时，状态必须为 pending_confirmation。"
+  - "不得保存完整债务人身份信息、手机号、地址或完整资产清单。"

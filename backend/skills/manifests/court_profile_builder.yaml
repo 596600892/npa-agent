@@ -1,0 +1,20 @@
+name: court_profile_builder
+risk_level: medium
+required_inputs:
+  - company_history_records
+optional_inputs:
+  - manual_court_tags
+  - failure_reasons
+permissions:
+  read_local_files: true
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: false
+missing_input_prompts:
+  company_history_records: "缺少公司历史处置记录，暂无法形成法院画像；可以先上传历史处置 Excel。"
+outputs:
+  - court_profiles
+  - court_labels
+  - source_record_ids

@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NPA Agent 工作台</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">NPA</div>
+          <div>
+            <h1>NPA Agent</h1>
+            <p>个贷资产包分析工作台</p>
+          </div>
+        </div>
+        <nav class="task-list">
+          <button class="task-button active" data-task="analysis">分析资产包</button>
+          <button class="task-button" data-task="strategy">生成处置策略</button>
+          <button class="task-button" data-task="script">电话调解话术</button>
+          <button class="task-button" data-task="history">历史项目</button>
+        </nav>
+        <section class="panel compact">
+          <h2>历史项目</h2>
+          <div id="projectList" class="project-list"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local-first MVP</p>
+            <h2 id="currentProjectTitle">上传 Excel，生成初筛报告</h2>
+            <p id="serviceAddress" class="service-address">正在确认本地服务...</p>
+          </div>
+          <div class="status-strip">
+            <span id="safetyStatus">脱敏云端</span>
+            <span id="modelStatus">模型未配置</span>
+            <span id="voiceStatus">自带语音</span>
+            <span id="healthStatus">服务校验中</span>
+          </div>
+        </header>
+
+        <section class="guided-workspace">
+          <aside class="panel guide-rail">
+            <div class="panel-header">
+              <h2>处理路径</h2>
+              <span id="guideProgress">0/7</span>
+            </div>
+            <div id="guidanceSteps" class="guidance-steps"></div>
+          </aside>
+
+          <section class="guide-main">
+            <section class="panel next-step-card">
+              <div class="panel-header">
+                <h2 id="guidanceTitle">先新建一个分析项目</h2>
+                <span id="guidanceBadge">等待开始</span>
+              </div>
+              <p id="guidanceMessage">你只需要从新建项目开始，后面我会按缺失内容一步步提示。</p>
+              <div id="guidanceActions" class="guidance-actions"></div>
+              <div id="guidanceBlockers" class="guidance-blockers"></div>
+              <div id="guidanceOptional" class="guidance-optional"></div>
+            </section>
+
+            <section class="work-grid guided-primary">
+              <div class="panel upload-panel" data-guide-step="asset">
+                <div class="panel-header">
+                  <h2>1. 上传资产包 Excel</h2>
+                  <span id="uploadStatus">等待上传</span>
+                </div>
+                <p class="muted-copy">必须有本金字段；姓名、身份证、手机号、地址提供越多，画像和处置判断越准。</p>
+                <input id="fileInput" type="file" accept=".xlsx" />
+                <button id="uploadBtn" class="primary-button">上传并识别字段</button>
+              </div>
+
+              <div class="panel mapping-panel" data-guide-step="mapping">
+                <div class="panel-header">
+                  <h2>2. 字段映射确认</h2>
+                  <span id="mappingStatus">尚未识别</span>
+                </div>
+                <div id="mappingList" class="mapping-list"></div>
+                <button id="confirmMappingBtn" class="primary-button" disabled>确认字段映射</button>
+              </div>
+
+              <div class="panel legal-panel" data-guide-step="materials">
+                <div class="panel-header">
+                  <h2>3. 补充合同/文书</h2>
+                  <span id="legalStatus">可选上传</span>
+                </div>
+                <p class="muted-copy">可选但很有价值：合同能帮助判断管辖、送达、债转通知、时效和息费风险。</p>
+                <input id="legalDocInput" type="file" accept=".pdf,.docx,.txt" />
+                <button id="uploadLegalBtn" class="primary-button">上传并分析合同</button>
+                <div id="legalRiskCards" class="risk-list">
+                  <p class="muted-copy">支持 PDF、DOCX、TXT。扫描 PDF 会提示先做 OCR，不影响资产包主流程。</p>
+                </div>
+              </div>
+
+              <div class="panel report-actions" data-guide-step="report">
+                <div class="panel-header">
+                  <h2>4. 生成报告</h2>
+                  <span id="analysisStatus">等待字段确认</span>
+                </div>
+                <p class="muted-copy">报告会先给老板能看的结论摘要，再给详细分析、来源和下一步动作。</p>
+                <button id="runAnalysisBtn" class="primary-button" disabled>生成初筛报告</button>
+                <div id="nextActions" class="next-actions"></div>
+              </div>
+            </section>
+          </section>
+
+          <section class="panel report-panel guide-report">
+            <div class="panel-header">
+              <h2>报告预览</h2>
+              <span id="reportStatus">尚未生成</span>
+            </div>
+            <article id="reportView" class="report-view">
+              <p>报告会显示在这里。敏感字段默认脱敏。</p>
+            </article>
+          </section>
+        </section>
+
+        <details class="expert-drawer">
+          <summary>
+            <span>辅助能力 / 专家区</span>
+            <small>银登、历史数据、法院画像、AI、语音、执行、知识库和私有 Skill 都在这里。</small>
+          </summary>
+
+          <section class="settings-strip">
+            <div class="panel chat-card">
+              <div class="chat-line agent">你可以直接问问题，也可以用语音输入。主流程会继续根据项目状态提示下一步。</div>
+            <div class="command-row">
+              <textarea id="commandInput" rows="3" placeholder="可以说或输入：帮我看这个银登公告、生成电话调解话术、总结当前报告"></textarea>
+              <div class="command-actions">
+                <button id="voiceListenBtn" class="icon-button" title="语音输入">🎙</button>
+                <button id="readSummaryBtn" class="icon-button" title="朗读摘要">▶</button>
+              </div>
+            </div>
+            <p id="voiceRuntimeStatus" class="micro-status">语音待命，自带语音可直接使用。</p>
+            <div class="quick-actions">
+              <a class="secondary-link" href="/templates/consumer-loan-template.xlsx">下载标准模板</a>
+              <a class="secondary-link" href="/templates/company-history-template.xlsx">下载历史模板</a>
+              <button id="newProjectBtn" class="primary-button">新建分析项目</button>
+            </div>
+          </div>
+          <div class="panel config-card">
+            <h3>模型与语音配置</h3>
+            <label>
+              模型服务商
+              <select id="modelProvider"></select>
+            </label>
+            <label>
+              模型 API Key
+              <input id="modelKey" type="password" placeholder="仅本地保存，不回显明文" />
+            </label>
+            <label>
+              Base URL
+              <input id="modelBaseUrl" type="text" placeholder="自动填充；自定义服务可修改" />
+            </label>
+            <label>
+              模型名称
+              <input id="modelName" type="text" placeholder="auto 或具体模型名" />
+            </label>
+            <div class="segmented">
+              <button data-mode="redacted_cloud" class="selected">脱敏云端</button>
+              <button data-mode="local">本地模式</button>
+              <button data-mode="original_cloud">原文云端</button>
+            </div>
+            <button id="saveModelBtn" class="text-button">保存模型配置</button>
+            <label class="toggle-line">
+              <input id="enhancedVoice" type="checkbox" />
+              启用增强语音
+            </label>
+            <label>
+              TTS 服务
+              <select id="voiceProvider"></select>
+            </label>
+            <label>
+              语音 API Key
+              <input id="voiceKey" type="password" placeholder="不填则使用浏览器自带语音" />
+            </label>
+            <label>
+              TTS Base URL
+              <input id="voiceBaseUrl" type="text" placeholder="增强 TTS 兼容接口地址" />
+            </label>
+            <label>
+              音色
+              <input id="voiceName" type="text" placeholder="nova" />
+            </label>
+            <button id="saveVoiceBtn" class="text-button">保存语音配置</button>
+          </div>
+        </section>
+
+        <section class="opportunity-grid">
+          <div class="panel yindeng-panel">
+            <div class="panel-header">
+              <h2>银登机会</h2>
+              <span id="yindengStatus">等待 URL</span>
+            </div>
+            <label>
+              公开公告 URL
+              <input id="yindengUrl" type="url" placeholder="https://www.yindeng.com.cn/..." />
+            </label>
+            <button id="fetchYindengBtn" class="primary-button">抓取并解析公告</button>
+            <textarea id="yindengText" rows="5" placeholder="URL 抓取失败时，也可以粘贴公告正文解析"></textarea>
+            <button id="parseYindengTextBtn" class="text-button">解析粘贴正文</button>
+            <div id="yindengList" class="notice-list"></div>
+          </div>
+
+          <div class="panel ai-panel">
+            <div class="panel-header">
+              <h2>AI 辅助</h2>
+              <span id="aiStatus">未调用</span>
+            </div>
+            <label>
+              任务
+              <select id="aiPurpose">
+                <option value="report_summary">报告摘要润色</option>
+                <option value="phone_script">电话调解话术</option>
+                <option value="yindeng_summary">银登公告总结</option>
+              </select>
+            </label>
+            <textarea id="aiInput" rows="7" placeholder="粘贴报告、公告或资产包摘要。默认脱敏后调用模型。"></textarea>
+            <button id="generateAiBtn" class="primary-button">生成 AI 建议</button>
+            <div id="aiOutput" class="ai-output"></div>
+          </div>
+
+          <div class="panel voice-panel">
+            <div class="panel-header">
+              <h2>语音</h2>
+              <span id="voicePanelStatus">自带语音</span>
+            </div>
+            <p class="muted-copy">语音默认只处理指令和脱敏摘要，不朗读完整身份证、手机号、地址。</p>
+            <button id="voiceQuickInputBtn" class="primary-button">开始语音输入</button>
+            <button id="voiceReadReportBtn" class="text-button">朗读当前报告摘要</button>
+            <button id="stopVoiceBtn" class="text-button">停止朗读</button>
+          </div>
+        </section>
+
+        <section class="history-grid">
+          <div class="panel history-panel">
+            <div class="panel-header">
+              <h2>历史数据校准</h2>
+              <span id="historyStatus">等待上传</span>
+            </div>
+            <input id="historyFileInput" type="file" accept=".xlsx" />
+            <button id="uploadHistoryBtn" class="primary-button">上传历史处置数据</button>
+            <div id="historyMappingList" class="mapping-list"></div>
+            <button id="confirmHistoryMappingBtn" class="primary-button" disabled>确认导入历史数据</button>
+            <div id="historyRecords" class="notice-list"></div>
+          </div>
+
+          <div class="panel court-panel">
+            <div class="panel-header">
+              <h2>法院画像</h2>
+              <span id="courtStatus">尚未生成</span>
+            </div>
+            <div id="courtProfiles" class="court-list"></div>
+          </div>
+        </section>
+
+        <section class="panel execution-panel">
+          <div class="panel-header">
+            <h2>处置执行工作台</h2>
+            <span id="executionStatus">尚未生成</span>
+          </div>
+          <div class="execution-toolbar">
+            <button id="generateExecutionBtn" class="primary-button">生成执行计划</button>
+            <a id="exportExecutionLink" class="secondary-link disabled-link" href="#" download>导出 Excel</a>
+            <label>
+              批次
+              <select id="executionBatchFilter"></select>
+            </label>
+            <label>
+              状态
+              <select id="executionStatusFilter">
+                <option value="">全部状态</option>
+                <option value="pending">待处理</option>
+                <option value="contacted">已接通</option>
+                <option value="no_answer">未接</option>
+                <option value="unreachable">失联</option>
+                <option value="willing">有意愿</option>
+                <option value="promise_payment">承诺还款</option>
+                <option value="dispute">异议</option>
+                <option value="switch_to_litigation">转诉讼评估</option>
+                <option value="outsourced">建议分包</option>
+                <option value="closed">已关闭</option>
+              </select>
+            </label>
+            <label>
+              层级
+              <select id="executionTierFilter">
+                <option value="">全部层级</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+                <option value="D">D</option>
+                <option value="L">诉讼候选</option>
+              </select>
+            </label>
+          </div>
+          <div id="executionSummary" class="execution-summary">
+            <p class="muted-copy">确认字段后可生成执行计划。我会自动分批次、给话术和下一步动作。</p>
+          </div>
+          <div id="executionTasks" class="execution-list"></div>
+        </section>
+
+        <section class="panel knowledge-panel">
+          <div class="panel-header">
+            <h2>知识库记忆</h2>
+            <span id="knowledgeStatus">本地 Markdown</span>
+          </div>
+          <div class="knowledge-toolbar">
+            <button id="syncKnowledgeBtn" class="primary-button">沉淀当前项目</button>
+            <label>
+              搜索本地知识库
+              <input id="knowledgeSearchInput" type="text" placeholder="项目名、法院、标签、关键词" />
+            </label>
+            <button id="searchKnowledgeBtn" class="text-button">搜索</button>
+          </div>
+          <div class="knowledge-grid">
+            <div>
+              <h3>笔记索引</h3>
+              <div id="knowledgeNotes" class="knowledge-list">
+                <p class="muted-copy">同步项目或保存偏好后，这里会出现本地 Markdown 笔记。</p>
+              </div>
+            </div>
+            <div>
+              <h3>笔记预览</h3>
+              <article id="knowledgePreview" class="knowledge-preview">
+                <p class="muted-copy">长期记忆默认不保存完整身份证、手机号、详细地址或完整资产清单。</p>
+              </article>
+              <div class="memory-confirm">
+                <textarea id="knowledgeConfirmNote" rows="3" placeholder="确认说明，可选。例如：已由负责人确认可作为公司长期经验。"></textarea>
+                <button id="confirmKnowledgeBtn" class="text-button">确认这条记忆</button>
+              </div>
+            </div>
+            <div>
+              <h3>公司偏好</h3>
+              <label>
+                标题
+                <input id="preferenceTitle" type="text" placeholder="例如：深圳地区报价偏好" />
+              </label>
+              <label>
+                类型
+                <input id="preferenceType" type="text" placeholder="报价规则 / 报告格式 / 区域偏好" />
+              </label>
+              <label>
+                内容
+                <textarea id="preferenceContent" rows="5" placeholder="先写成待确认记忆；勾选后才作为长期偏好。"></textarea>
+              </label>
+              <label class="toggle-line">
+                <input id="preferenceConfirmed" type="checkbox" />
+                已人工确认，可写入长期偏好
+              </label>
+              <button id="savePreferenceBtn" class="text-button">保存偏好笔记</button>
+              <h3 class="subhead">法院经验</h3>
+              <label>
+                法院名称
+                <input id="courtExperienceName" type="text" placeholder="例如：深圳市南山区人民法院" />
+              </label>
+              <label>
+                复盘内容
+                <textarea id="courtExperienceContent" rows="5" placeholder="例如：批量立案体验、调解效率、执行反馈、失败原因。"></textarea>
+              </label>
+              <label class="toggle-line">
+                <input id="courtExperienceConfirmed" type="checkbox" />
+                已人工确认，可作为法院长期经验
+              </label>
+              <button id="saveCourtExperienceBtn" class="text-button">保存法院经验</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel private-skill-panel">
+          <div class="panel-header">
+            <h2>私有 Skill 草稿</h2>
+            <span id="privateSkillStatus">未启用调用</span>
+          </div>
+          <div class="private-skill-toolbar">
+            <label>
+              草稿类型
+              <select id="privateSkillType">
+                <option value="company_pricing_rule">公司报价规则</option>
+                <option value="court_disposition_experience">法院处置经验</option>
+                <option value="report_style_preference">报告风格偏好</option>
+              </select>
+            </label>
+            <button id="generatePrivateSkillBtn" class="primary-button">从已确认记忆生成草稿</button>
+            <span class="micro-status">草稿不会自动启用，也不会参与分析链路。</span>
+          </div>
+          <div class="private-skill-grid">
+            <div>
+              <h3>草稿列表</h3>
+              <div id="privateSkillDrafts" class="private-skill-list">
+                <p class="muted-copy">确认记忆后，可以在这里生成私有 skill 草稿。</p>
+              </div>
+            </div>
+            <div>
+              <h3>草稿预览</h3>
+              <article id="privateSkillPreview" class="private-skill-preview">
+                <p class="muted-copy">草稿会展示 manifest、依据来源、权限风险和人工审核提示。</p>
+              </article>
+              <div class="private-skill-review">
+                <input id="privateSkillReviewer" type="text" placeholder="审核人，可选" />
+                <textarea id="privateSkillReviewNote" rows="3" placeholder="审核说明，可选"></textarea>
+                <div class="review-actions">
+                  <button id="approvePrivateSkillBtn" class="text-button">审核通过</button>
+                  <button id="revisePrivateSkillBtn" class="text-button">退回修改</button>
+                  <button id="archivePrivateSkillBtn" class="text-button">归档</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        </details>
+      </main>
+    </div>
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>

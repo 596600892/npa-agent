@@ -1,0 +1,29 @@
+name: obsidian_knowledge_base
+display_name: 本地知识库记忆
+risk_level: medium
+description: 将项目复盘、法院画像、合同风险和执行结果沉淀为本地 Markdown 笔记，并写入 SQLite 索引供搜索。
+required_inputs:
+  - project
+optional_inputs:
+  - analysis_report
+  - legal_risk
+  - execution_plan
+  - execution_events
+  - court_profiles
+permissions:
+  read_local_files: true
+  write_project_record: true
+  network_access: false
+  read_memory: true
+  write_memory: true
+  access_sensitive_data: true
+outputs:
+  - markdown_note
+  - knowledge_index_record
+missing_input_prompts:
+  analysis_report: "尚未生成报告，也可以先保存项目摘要；生成报告后再次沉淀会更完整。"
+  execution_plan: "尚未生成执行计划，知识库会先记录分析结论，后续可补充跟进复盘。"
+safety_notes:
+  - "默认写入本地 data/knowledge，不自动写入外部 Obsidian vault。"
+  - "写入前必须脱敏姓名、身份证、手机号和详细地址。"
+  - "法院主观评价和公司定价规则需要人工确认后再作为长期偏好。"

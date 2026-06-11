@@ -1,0 +1,25 @@
+name: memory_evolution_agent
+display_name: 记忆进化 Agent
+risk_level: medium
+description: 从已确认的本地知识库记忆中整理公司偏好、法院经验和项目复盘，并准备私有 skill 草稿输入。
+required_inputs:
+  - confirmed_memory
+optional_inputs:
+  - draft_type
+  - source_note_filter
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: true
+  write_memory: true
+  access_sensitive_data: false
+outputs:
+  - skill_draft_seed
+  - source_note_summary
+missing_input_prompts:
+  confirmed_memory: "请先确认至少一条公司偏好、法院经验或项目复盘记忆。"
+safety_notes:
+  - "只读取 confirmed 记忆，不使用待确认记忆生成草稿。"
+  - "不得输出完整身份证、手机号、详细地址或完整资产清单。"
+  - "本阶段只准备草稿输入，不自动启用 skill。"

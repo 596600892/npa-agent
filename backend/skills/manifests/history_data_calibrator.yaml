@@ -1,0 +1,22 @@
+name: history_data_calibrator
+risk_level: medium
+required_inputs:
+  - company_history_records
+  - current_project_accounts
+optional_inputs:
+  - court_profiles
+  - region
+  - disposal_method
+permissions:
+  read_local_files: true
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: false
+missing_input_prompts:
+  company_history_records: "未上传公司历史处置数据，报价仍可按规则区间生成；上传历史数据后可校准回收率、周期和法院经验。"
+outputs:
+  - pricing_calibration
+  - matched_history_records
+  - confidence

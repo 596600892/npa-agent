@@ -1,0 +1,28 @@
+name: private_skill_draft_generator
+display_name: 私有 Skill 草稿生成器
+risk_level: medium
+description: 生成公司私有 skill 草稿、权限声明、风险边界和人工审核提示；草稿不自动启用。
+required_inputs:
+  - confirmed_memory
+  - draft_type
+optional_inputs:
+  - title
+  - reviewer_note
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: true
+  write_memory: true
+  access_sensitive_data: false
+outputs:
+  - private_skill_draft
+  - yaml_like_manifest
+  - review_checklist
+missing_input_prompts:
+  draft_type: "请选择草稿类型：公司报价规则、法院处置经验或报告风格偏好。"
+  confirmed_memory: "没有可用于生成草稿的已确认记忆，请先确认记忆。"
+safety_notes:
+  - "approved 只代表可作为公司知识沉淀，不代表已启用或会参与分析。"
+  - "不联网、不安装 GitHub/community skill。"
+  - "后续启用必须另行做沙箱、版本锁定、权限审计和回归测试。"

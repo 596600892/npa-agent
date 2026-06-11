@@ -1,0 +1,23 @@
+name: mediation_batch_generator
+display_name: 电话调解批次生成
+risk_level: medium
+description: 按手机号完整度、金额段、地区和风险线索生成电话调解首轮、小额批量触达和重点户批次。
+required_inputs:
+  - execution_tasks
+optional_inputs:
+  - phone_coverage
+  - legal_risk
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: true
+outputs:
+  - mediation_batches
+  - compliant_scripts
+missing_input_prompts:
+  execution_tasks: "请先生成处置执行计划，再生成电话调解批次。"
+safety_notes:
+  - "话术不得包含威胁、骚扰、冒充司法机关或向第三人泄露债务信息。"

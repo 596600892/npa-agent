@@ -1,0 +1,25 @@
+name: execution_record_keeper
+display_name: 处置跟进记录
+risk_level: medium
+description: 保存执行任务状态、跟进结果、备注和下一步动作，用于项目回放和后续历史经验沉淀。
+required_inputs:
+  - execution_task
+  - contact_result
+optional_inputs:
+  - note
+  - next_action
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: true
+outputs:
+  - execution_event
+  - updated_execution_task
+missing_input_prompts:
+  execution_task: "请先选择一条执行任务。"
+safety_notes:
+  - "只记录跟进结果，不代表实际拨打电话或发送通知。"
+  - "备注中不建议写入完整身份证、手机号或详细住址。"

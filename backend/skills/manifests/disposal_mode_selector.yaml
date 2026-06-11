@@ -1,0 +1,17 @@
+name: disposal_mode_selector
+version: "0.1"
+risk_level: medium
+description: "根据数据完整度、金额结构、触达能力和管辖集中度选择处置模式"
+required_inputs:
+  - normalized_loan_accounts
+  - data_quality
+  - debtor_profile
+permissions:
+  read_local_files: false
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: false
+outputs:
+  - disposition_plan

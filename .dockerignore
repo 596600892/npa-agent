@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__/
+*.py[cod]
+.DS_Store
+data/app.sqlite
+data/uploads/*
+data/reports/*
+data/audit/*
+data/secrets/*
+data/company_history/*
+data/legal_docs/*
+data/knowledge/*
+data/private_skills/*
+frontend/**/*.map

@@ -1,0 +1,20 @@
+name: yindeng_notice_parser
+risk_level: medium
+required_inputs:
+  - source_url_or_notice_text
+optional_inputs:
+  - model_gateway
+  - uploaded_pdf_or_html
+permissions:
+  read_local_files: true
+  write_project_record: true
+  network_access: true
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: false
+missing_input_prompts:
+  source_url_or_notice_text: "请粘贴银登公开公告 URL 或公告正文；第一版不处理登录、验证码和全站自动爬取。"
+outputs:
+  - parsed_notice
+  - source_attribution
+  - next_actions

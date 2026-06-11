@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import backend.app as app
+from backend.core.yindeng_parser import parse_yindeng_notice
+from backend.storage import db
+
+
+NOTICE_TEXT = """
+中国东方资产管理股份有限公司拟通过银行业信贷资产登记流转中心转让个人不良贷款资产包。
+本资产包债务人 128 户，债权本金 1234.56 万元，利息 234.50 万元，本息合计 1469.06 万元。
+借款人主要分布于广东、湖南，报名截止时间为 2026年6月18日，竞价时间为 2026年6月20日。
+"""
+
+
+class FakeModelHandler(BaseHTTPRequestHandler):
+    captured = ""
+
+    def log_message(self, fmt, *args):
+        return
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        FakeModelHandler.captured = body.decode("utf-8")
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "模型连接成功。已生成脱敏建议。",
+                    }
+                }
+            ]
+        }
+        encoded = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+class NextStageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp(prefix="npa-agent-next-")
+        cls.old_db = db.DB_PATH
+        cls.old_data = db.DATA_DIR
+        db.DB_PATH = Path(cls.tmpdir) / "app.sqlite"
+        db.DATA_DIR = Path(cls.tmpdir)
+        db.init_db()
+        cls.server = app.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.fake_model = ThreadingHTTPServer(("127.0.0.1", 0), FakeModelHandler)
+        cls.fake_model_port = cls.fake_model.server_address[1]
+        cls.fake_thread = threading.Thread(target=cls.fake_model.serve_forever, daemon=True)
+        cls.fake_thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.thread.join(timeout=3)
+        cls.server.server_close()
+        cls.fake_model.shutdown()
+        cls.fake_thread.join(timeout=3)
+        cls.fake_model.server_close()
+        db.DB_PATH = cls.old_db
+        db.DATA_DIR = cls.old_data
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def post(self, path, payload, allow_error=False):
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if not allow_error:
+                raise
+            try:
+                return json.loads(exc.read().decode("utf-8"))
+            finally:
+                exc.close()
+
+    def get(self, path):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def test_yindeng_parser_extracts_core_fields(self):
+        parsed = parse_yindeng_notice(NOTICE_TEXT)
+        self.assertEqual(parsed.asset_type, "consumer_loan")
+        self.assertEqual(parsed.debtor_count, 128)
+        self.assertAlmostEqual(parsed.principal or 0, 12345600)
+        self.assertIn("广东", parsed.regions)
+        self.assertIn("湖南", parsed.regions)
+        self.assertIn("announcement_date", parsed.dates)
+        self.assertIn(parsed.confidence, {"medium", "high"})
+
+    def test_yindeng_parse_api_can_create_project(self):
+        parsed = self.post("/api/intelligence/yindeng/parse", {"text": NOTICE_TEXT, "source_type": "manual_text"})
+        self.assertTrue(parsed["ok"])
+        notice_id = parsed["notice"]["id"]
+        created = self.post(f"/api/intelligence/yindeng/notices/{notice_id}/create-project", {})
+        self.assertTrue(created["ok"])
+        self.assertTrue(created["project"]["name"].startswith("银登机会"))
+        notices = self.get("/api/intelligence/yindeng/notices")
+        self.assertGreaterEqual(len(notices["notices"]), 1)
+
+    def test_model_gateway_redacts_sensitive_prompt_and_hides_key(self):
+        saved = self.post(
+            "/api/settings/model",
+            {
+                "mode": "redacted_cloud",
+                "provider": "custom_openai_compatible",
+                "base_url": f"http://127.0.0.1:{self.fake_model_port}/v1",
+                "model": "fake-chat",
+                "api_key": "sk-local-secret",
+            },
+        )
+        self.assertTrue(saved["model"]["api_key_present"])
+        generated = self.post(
+            "/api/ai/generate",
+            {
+                "purpose": "phone_script",
+                "content": "债务人张三，身份证440305199001011234，手机号13812345678，地址广东省深圳市南山区科技园。",
+                "safety_mode": "redacted_cloud",
+            },
+        )
+        self.assertTrue(generated["ok"])
+        self.assertIn("脱敏", generated["result"]["text"])
+        self.assertNotIn("440305199001011234", FakeModelHandler.captured)
+        self.assertNotIn("13812345678", FakeModelHandler.captured)
+        loaded = self.get("/api/settings/model")
+        self.assertNotIn("sk-local-secret", json.dumps(loaded, ensure_ascii=False))
+
+    def test_voice_tts_without_key_returns_actionable_error(self):
+        db.set_setting("voice", {"mode": "enhanced", "enhanced_enabled": True, "tts_provider": "openai_compatible_tts"})
+        result = self.post("/api/voice/tts", {"text": "朗读当前报告摘要"}, allow_error=True)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "voice_not_configured")
+        self.assertIn("use_builtin_browser_voice", result["next_actions"])
+
+
+if __name__ == "__main__":
+    unittest.main()

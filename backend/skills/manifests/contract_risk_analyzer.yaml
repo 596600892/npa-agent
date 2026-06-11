@@ -1,0 +1,27 @@
+name: contract_risk_analyzer
+display_name: 合同/文书风险分析
+risk_level: medium
+description: 本地解析 PDF、DOCX、TXT 合同或条款文本，识别管辖、仲裁、送达、债权转让通知、诉讼时效、证据链和息费风险。
+required_inputs:
+  - legal_document
+  - extracted_text
+optional_inputs:
+  - loan_accounts
+  - court_profile
+  - company_history
+permissions:
+  read_local_files: true
+  write_project_record: true
+  network_access: false
+  read_memory: false
+  write_memory: false
+  access_sensitive_data: true
+outputs:
+  - legal_risk_analysis
+  - source_attributions
+  - next_actions
+missing_input_prompts:
+  legal_document: "请上传 PDF、DOCX 或 TXT 合同/条款文件；扫描 PDF 需要先做 OCR 或粘贴可复制文本。"
+safety_notes:
+  - "本 skill 只提供辅助风险提示，不构成法律意见。"
+  - "默认本地解析，不调用云模型，不外发合同原文。"

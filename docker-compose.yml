@@ -1,0 +1,12 @@
+services:
+  npa-agent:
+    build: .
+    ports:
+      - "${PORT:-8765}:8765"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8765
+      PUBLIC_URL: "http://127.0.0.1:${PORT:-8765}"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

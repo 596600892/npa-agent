@@ -43,6 +43,29 @@ def _document_type_label(value: str | None) -> str:
     }.get(value or "unknown", value or "未识别")
 
 
+def _dimension_labels(values: list[str] | None) -> str:
+    labels = {
+        "asset_type": "资产类型",
+        "court": "法院",
+        "region": "地区",
+        "amount_bucket": "金额段",
+        "disposal_method": "处置方式",
+    }
+    if not values:
+        return "-"
+    return "、".join(labels.get(value, value) for value in values)
+
+
+def _breakdown_table(title: str, rows: list[dict]) -> list[str]:
+    lines = [f"**{title}**", "", "| 维度值 | 样本数 | 可算回收率 | 平均回收率 | 平均周期 |", "|---|---:|---:|---:|---:|"]
+    if not rows:
+        lines.append("| 无匹配 | 0 | 0 | 样本不足 | 样本不足 |")
+        return lines
+    for item in rows[:6]:
+        lines.append(f"| {item.get('key') or '-'} | {item.get('sample_count', 0)} | {item.get('usable_recovery_count', 0)} | {_maybe_percent(item.get('average_recovery_rate'))} | {_maybe_number(item.get('average_recovery_months'), ' 月')} |")
+    return lines
+
+
 def write_report(
     project: dict,
     quality: dict,
@@ -239,8 +262,15 @@ def write_report(
     calibration = pricing.get("calibration", {})
     lines.append("## 九、公司历史校准")
     lines.append("")
-    lines.append(f"**匹配历史样本：{calibration.get('matched_count', 0)} 条；可计算回收率样本：{calibration.get('usable_recovery_count', 0)} 条；校准可信度：{calibration.get('confidence', 'none')}。**")
+    sample_confidence = calibration.get("sample_confidence", calibration.get("confidence", "none"))
+    context = calibration.get("project_context", {})
+    lines.append(f"**匹配历史样本：{calibration.get('matched_count', 0)} 条；可计算回收率样本：{calibration.get('usable_recovery_count', 0)} 条；样本可信度：{sample_confidence}。**")
     lines.append("")
+    lines.append(f"- 当前资产包金额段：{context.get('amount_bucket', 'unknown')}；户均本金：{_maybe_number(context.get('average_principal'), ' 元')}。")
+    if context.get("courts"):
+        lines.append(f"- 当前法院线索：{'、'.join(context.get('courts', []))}。")
+    if context.get("regions"):
+        lines.append(f"- 当前地区线索：{'、'.join(context.get('regions', []))}。")
     lines.append(f"- 匹配历史平均回收率：{_maybe_percent(calibration.get('average_recovery_rate'))}。")
     lines.append(f"- 匹配历史平均回款周期：{_maybe_number(calibration.get('average_recovery_months'), ' 个月')}。")
     lines.append(f"- 报价区间修正：{calibration.get('adjustment', 0.0):+.1%}。")
@@ -248,10 +278,25 @@ def write_report(
         lines.append(f"- {reason}")
     if calibration.get("matched_records"):
         lines.append("")
-        lines.append("| 历史项目 | 法院 | 地区 | 回收率 | 周期 | 匹配分 |")
-        lines.append("|---|---|---|---:|---:|---:|")
+        lines.append("**匹配维度解释**")
+        lines.append("")
+        lines.append("| 历史项目 | 法院 | 地区 | 金额段 | 命中维度 | 缺失/未命中 | 回收率 | 匹配分 |")
+        lines.append("|---|---|---|---|---|---|---:|---:|")
         for item in calibration["matched_records"][:6]:
-            lines.append(f"| {item.get('project_name') or '-'} | {item.get('court_name') or '-'} | {item.get('region') or '-'} | {_maybe_percent(item.get('recovery_rate'))} | {_maybe_number(item.get('recovery_months'), ' 月')} | {item.get('match_score', 0)} |")
+            lines.append(f"| {item.get('project_name') or '-'} | {item.get('court_name') or '-'} | {item.get('region') or '-'} | {item.get('amount_bucket') or '-'} | {_dimension_labels(item.get('matched_dimensions'))} | {_dimension_labels(item.get('missing_dimensions'))} | {_maybe_percent(item.get('recovery_rate'))} | {item.get('match_score', 0)} |")
+        lines.append("")
+        lines.append("分维度对比：")
+        breakdown = calibration.get("breakdown", {})
+        lines.extend(_breakdown_table("按法院", breakdown.get("by_court", [])))
+        lines.append("")
+        lines.extend(_breakdown_table("按地区", breakdown.get("by_region", [])))
+        lines.append("")
+        lines.extend(_breakdown_table("按金额段", breakdown.get("by_amount_bucket", [])))
+        lines.append("")
+        lines.extend(_breakdown_table("按处置方式", breakdown.get("by_disposal_method", [])))
+    else:
+        lines.append("")
+        lines.append("匹配维度解释：暂无命中历史样本，规则报价为主，历史仅作参考。")
     lines.append("")
     lines.append("## 十、法院画像")
     lines.append("")

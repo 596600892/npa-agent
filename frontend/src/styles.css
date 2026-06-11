@@ -905,6 +905,72 @@ textarea {
   margin-top: 10px;
 }
 
+.history-analytics,
+.history-calibration {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.history-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.history-metrics span,
+.calibration-card {
+  border: 1px solid #e0e8e3;
+  background: #fbfcf8;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.history-metrics strong {
+  display: block;
+  color: var(--teal);
+  font-size: 18px;
+}
+
+.history-breakdown {
+  border: 1px solid #e0e8e3;
+  border-radius: 6px;
+  background: #fff;
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.history-breakdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.history-breakdown th,
+.history-breakdown td {
+  border-top: 1px solid #edf0ec;
+  padding: 6px;
+  text-align: left;
+}
+
+.calibration-card {
+  display: grid;
+  gap: 6px;
+}
+
+.calibration-card span,
+.calibration-card small,
+.calibration-card li {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.calibration-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .review-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1174,6 +1240,7 @@ label {
   .private-skill-grid,
   .review-actions,
   .audit-metrics,
+  .history-metrics,
   .execution-toolbar,
   .execution-metrics,
   .execution-update {

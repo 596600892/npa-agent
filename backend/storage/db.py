@@ -718,6 +718,16 @@ def insert_pricing_calibration(record: dict) -> None:
         )
 
 
+def latest_pricing_calibration(project_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM pricing_calibrations WHERE project_id=? ORDER BY created_at DESC LIMIT 1", (project_id,)).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["calibration"] = json.loads(data.pop("calibration_json"))
+        return data
+
+
 def insert_legal_document(record: dict) -> None:
     with connect() as conn:
         conn.execute(

@@ -14,6 +14,8 @@ const state = {
   historyFile: null,
   historyMappingPreview: null,
   historyRecords: [],
+  historyAnalytics: null,
+  currentCalibration: null,
   courtProfiles: [],
   selectedMode: "redacted_cloud",
   modelProviders: [],
@@ -115,6 +117,13 @@ function percent(value) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "样本不足";
   return `${(amount * 100).toFixed(1)}%`;
+}
+
+function compactNumber(value) {
+  if (value === null || value === undefined) return "样本不足";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "样本不足";
+  return amount.toFixed(1);
 }
 
 function riskLabel(value) {
@@ -372,6 +381,7 @@ async function createProject() {
   state.file = null;
   state.mappingPreview = null;
   state.fieldMappingConfirmed = false;
+  state.currentCalibration = null;
   state.latestReportText = "";
   $("currentProjectTitle").textContent = state.project.name;
   $("uploadStatus").textContent = "项目已创建";
@@ -382,6 +392,7 @@ async function createProject() {
   $("runAnalysisBtn").disabled = true;
   $("reportStatus").textContent = "尚未生成";
   $("reportView").innerHTML = "<p>报告会显示在这里。敏感字段默认脱敏。</p>";
+  renderProjectCalibration(null);
   state.latestLegalRisk = null;
   renderLegalRisk(null);
   $("legalStatus").textContent = "可选上传";
@@ -406,6 +417,7 @@ async function uploadFile() {
   state.file = uploaded.file;
   state.fieldMappingConfirmed = false;
   state.latestReportText = "";
+  state.currentCalibration = null;
   toast("已上传，正在识别字段...");
   const preview = await apiPost(`/api/projects/${state.project.id}/field-mapping/preview`, { file_id: state.file.id });
   if (!preview.ok) return alert(preview.message);
@@ -641,6 +653,7 @@ async function loadLatestReport() {
   }
   $("reportStatus").textContent = "已生成";
   state.latestReportText = data.report.markdown;
+  state.currentCalibration = data.report.data?.calibration || null;
   $("reportView").innerHTML = markdownToHtml(data.report.markdown);
   $("aiInput").value = data.report.markdown.slice(0, 2500);
   const next = $("nextActions");
@@ -651,6 +664,7 @@ async function loadLatestReport() {
     chip.textContent = action;
     next.appendChild(chip);
   }
+  renderProjectCalibration(state.currentCalibration);
   renderGuidance();
 }
 
@@ -1118,8 +1132,12 @@ async function loadYindengNotices() {
 }
 
 async function loadHistoryRecords() {
-  const data = await apiGet("/api/company-history/records");
+  const [data, analyticsData] = await Promise.all([apiGet("/api/company-history/records"), apiGet("/api/company-history/analytics")]);
   if (!data.ok) return;
+  if (analyticsData.ok) {
+    state.historyAnalytics = analyticsData.analytics;
+    renderHistoryAnalytics(state.historyAnalytics);
+  }
   const wrap = $("historyRecords");
   const records = data.records || [];
   state.historyRecords = records;
@@ -1140,6 +1158,75 @@ async function loadHistoryRecords() {
     wrap.appendChild(card);
   }
   renderGuidance();
+}
+
+function renderHistoryAnalytics(analytics) {
+  const wrap = $("historyAnalytics");
+  if (!wrap) return;
+  if (!analytics || !analytics.total_records) {
+    wrap.innerHTML = `<p class="muted-copy">上传历史处置数据后，我会按地区、法院、金额段和处置方式做聚合。</p>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="history-metrics">
+      <span><strong>${analytics.total_records}</strong>历史样本</span>
+      <span><strong>${analytics.usable_recovery_count}</strong>可算回收率</span>
+      <span><strong>${escapeHtml(percent(analytics.average_recovery_rate))}</strong>平均回收率</span>
+      <span><strong>${escapeHtml(compactNumber(analytics.average_recovery_months))}</strong>平均周期（月）</span>
+    </div>
+    ${historyBreakdownTable("地区", analytics.by_region)}
+    ${historyBreakdownTable("法院", analytics.by_court)}
+    ${historyBreakdownTable("金额段", analytics.by_amount_bucket)}
+    ${historyBreakdownTable("处置方式", analytics.by_disposal_method)}
+  `;
+}
+
+function historyBreakdownTable(title, rows = []) {
+  const body = rows
+    .slice(0, 5)
+    .map(
+      (item) => `
+        <tr>
+          <td>${escapeHtml(item.key)}</td>
+          <td>${escapeHtml(item.sample_count)}</td>
+          <td>${escapeHtml(percent(item.average_recovery_rate))}</td>
+          <td>${escapeHtml(compactNumber(item.average_recovery_months))}</td>
+        </tr>
+      `
+    )
+    .join("");
+  return `
+    <div class="history-breakdown">
+      <strong>${escapeHtml(title)}</strong>
+      <table>
+        <thead><tr><th>维度值</th><th>样本</th><th>回收率</th><th>周期</th></tr></thead>
+        <tbody>${body || `<tr><td>无数据</td><td>0</td><td>样本不足</td><td>样本不足</td></tr>`}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderProjectCalibration(calibration) {
+  const wrap = $("projectCalibration");
+  if (!wrap) return;
+  if (!calibration) {
+    wrap.innerHTML = `<p class="muted-copy">生成项目报告后，这里会显示本项目命中的历史样本和报价修正依据。</p>`;
+    return;
+  }
+  const records = (calibration.matched_records || [])
+    .slice(0, 5)
+    .map((item) => `<li>${escapeHtml(item.project_name || "历史项目")}：${escapeHtml(item.match_reason || "存在匹配")}，回收率 ${escapeHtml(percent(item.recovery_rate))}，匹配分 ${escapeHtml(item.match_score || 0)}</li>`)
+    .join("");
+  const reasons = (calibration.reasons || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  wrap.innerHTML = `
+    <div class="calibration-card">
+      <strong>本项目历史校准</strong>
+      <span>样本 ${calibration.matched_count || 0} · 可算回收率 ${calibration.usable_recovery_count || 0} · 可信度 ${escapeHtml(calibration.sample_confidence || calibration.confidence || "none")} · 修正 ${(Number(calibration.adjustment || 0) * 100).toFixed(1)}%</span>
+      <small>当前金额段：${escapeHtml(calibration.project_context?.amount_bucket || "unknown")} · 户均本金 ${escapeHtml(money(calibration.project_context?.average_principal))}</small>
+      <ul>${records || "<li>暂无命中历史样本，规则报价为主。</li>"}</ul>
+      <ul>${reasons}</ul>
+    </div>
+  `;
 }
 
 async function loadCourtProfiles() {
@@ -1169,6 +1256,7 @@ async function loadCourtProfiles() {
         <span>${escapeHtml(percent(profile.average_recovery_rate))}</span>
         <span>${profile.average_recovery_months ? `${Number(profile.average_recovery_months).toFixed(1)} 月` : "周期不足"}</span>
       </div>
+      <small>主金额段：${escapeHtml(profile.primary_amount_bucket || "unknown")} · 主处置方式：${escapeHtml(profile.primary_disposal_method || "未填")} · 可信度 ${escapeHtml(profile.sample_confidence || "low")}</small>
       <small>常见失败原因：${escapeHtml(failures)}</small>
     `;
     wrap.appendChild(card);

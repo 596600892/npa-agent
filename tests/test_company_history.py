@@ -12,9 +12,10 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 
 import backend.app as app
-from backend.core.company_history import build_court_profiles, normalize_history_rows
+from backend.core.company_history import amount_bucket, build_company_history_analytics, build_court_profiles, normalize_history_rows
 from backend.core.company_history_mapping import preview_history_mapping
 from backend.core.excel_parser import parse_excel
+from backend.core.history_calibrator import build_pricing_calibration
 from backend.storage import db
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,8 +56,69 @@ class CompanyHistoryCoreTests(unittest.TestCase):
             profiles = build_court_profiles(records)
             self.assertEqual(profiles[0]["court_name"], "深圳市南山区人民法院")
             self.assertIn(profiles[0]["label"], {"efficient", "normal", "cautious", "difficult"})
+            self.assertEqual(records[0]["derived"]["amount_bucket"], "2w-10w")
+            self.assertEqual(profiles[0]["primary_amount_bucket"], "2w-10w")
+            self.assertIn("电话调解", profiles[0]["disposal_method_distribution"])
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_amount_buckets_and_calibration_explain_match_dimensions(self):
+        self.assertEqual(amount_bucket(3000), "0-5k")
+        self.assertEqual(amount_bucket(12000), "5k-2w")
+        self.assertEqual(amount_bucket(50000), "2w-10w")
+        self.assertEqual(amount_bucket(150000), "10w+")
+        records = [
+            {
+                "id": "hist_a",
+                "project_name": "深圳同院样本",
+                "asset_type": "consumer_loan",
+                "region": "广东深圳",
+                "court_name": "深圳市南山区人民法院",
+                "account_count": 10,
+                "principal_total": 100000,
+                "recovered_amount": 16000,
+                "recovery_months": 12,
+                "disposal_method": "电话调解",
+                "derived": {"recovery_rate": 0.16, "amount_bucket": "5k-2w"},
+            },
+            {
+                "id": "hist_b",
+                "project_name": "弱匹配样本",
+                "asset_type": "enterprise_loan",
+                "region": "浙江杭州",
+                "court_name": "杭州市西湖区人民法院",
+                "account_count": 2,
+                "principal_total": 400000,
+                "recovered_amount": 12000,
+                "recovery_months": 30,
+                "disposal_method": "诉讼执行",
+                "derived": {"recovery_rate": 0.03, "amount_bucket": "10w+"},
+            },
+        ]
+        accounts = [
+            {"principal": 9000, "address": "广东省深圳市南山区", "derived": {"id_region": "广东"}, "optional": {"jurisdiction_court": "深圳市南山区人民法院"}},
+            {"principal": 11000, "address": "广东省深圳市福田区", "derived": {"id_region": "广东"}, "optional": {"jurisdiction_court": "深圳市南山区人民法院"}},
+        ]
+        calibration = build_pricing_calibration({"asset_type": "consumer_loan"}, accounts, records, build_court_profiles(records))
+        first = calibration["matched_records"][0]
+        self.assertEqual(calibration["project_context"]["amount_bucket"], "5k-2w")
+        self.assertIn("court", first["matched_dimensions"])
+        self.assertIn("region", first["matched_dimensions"])
+        self.assertIn("amount_bucket", first["matched_dimensions"])
+        self.assertIn("命中同法院", first["match_reason"])
+        self.assertIn("by_amount_bucket", calibration["breakdown"])
+        self.assertLessEqual(abs(calibration["adjustment"]), 0.03)
+
+    def test_company_history_analytics_groups_records(self):
+        records = [
+            {"region": "广东深圳", "court_name": "深圳市南山区人民法院", "principal_total": 100000, "recovery_months": 12, "disposal_method": "电话调解", "derived": {"recovery_rate": 0.16, "amount_bucket": "5k-2w"}},
+            {"region": "广东深圳", "court_name": "深圳市福田区人民法院", "principal_total": 200000, "recovery_months": 18, "disposal_method": "诉讼执行", "derived": {"recovery_rate": 0.08, "amount_bucket": "2w-10w"}},
+        ]
+        analytics = build_company_history_analytics(records)
+        self.assertEqual(analytics["total_records"], 2)
+        self.assertEqual(analytics["usable_recovery_count"], 2)
+        self.assertEqual(analytics["by_region"][0]["key"], "广东深圳")
+        self.assertTrue(any(item["key"] == "5k-2w" for item in analytics["by_amount_bucket"]))
 
 
 class CompanyHistoryApiTests(unittest.TestCase):
@@ -106,8 +168,12 @@ class CompanyHistoryApiTests(unittest.TestCase):
         confirmed = self.post("/api/company-history/field-mapping/confirm", {"file_id": uploaded["file"]["id"], "mapping": mapping, "confidence": preview["mapping"]})
         self.assertEqual(confirmed["normalized_count"], 5)
         self.assertGreaterEqual(confirmed["court_profile_count"], 3)
+        analytics = self.get("/api/company-history/analytics")["analytics"]
+        self.assertGreaterEqual(analytics["total_records"], 5)
+        self.assertTrue(analytics["by_amount_bucket"])
         profiles = self.get("/api/courts/profiles")["profiles"]
         self.assertTrue(any(item["court_name"] == "深圳市南山区人民法院" for item in profiles))
+        self.assertTrue(any(item.get("primary_amount_bucket") for item in profiles))
 
         project = self.post("/api/projects", {"name": "历史校准 API 样例", "asset_type": "consumer_loan"})["project"]
         sample_content = base64.b64encode((ROOT / "samples" / "level3_court.xlsx").read_bytes()).decode("ascii")
@@ -120,7 +186,14 @@ class CompanyHistoryApiTests(unittest.TestCase):
         report = self.get(f"/api/projects/{project['id']}/reports/latest")["report"]
         self.assertIn("公司历史校准", report["markdown"])
         self.assertIn("法院画像", report["markdown"])
+        self.assertIn("匹配维度解释", report["markdown"])
+        self.assertIn("样本可信度", report["markdown"])
+        self.assertIn("分维度对比", report["markdown"])
         self.assertGreater(report["data"]["calibration"]["matched_count"], 0)
+        latest = self.get(f"/api/projects/{project['id']}/calibration/latest")["calibration"]
+        self.assertEqual(latest["project_id"], project["id"])
+        self.assertIn("breakdown", latest["calibration"])
+        self.assertIn("sample_confidence", latest["calibration"])
 
 
 if __name__ == "__main__":

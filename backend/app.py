@@ -16,7 +16,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.core.analysis import run_analysis
-from backend.core.company_history import build_court_profiles, normalize_history_rows
+from backend.core.company_history import build_company_history_analytics, build_court_profiles, normalize_history_rows
 from backend.core.company_history_mapping import preview_history_mapping
 from backend.core.contract_risk_analyzer import analyze_contract_risk
 from backend.core.document_ingestion import ingest_bytes, parser_status
@@ -384,15 +384,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"ok": True, "alerts": db.list_yindeng_alerts()})
             if parsed.path == "/api/company-history/records":
                 return self._send_json(200, {"ok": True, "records": db.list_company_history_records()})
+            if parsed.path == "/api/company-history/analytics":
+                records = db.list_company_history_records()
+                return self._send_json(200, {"ok": True, "analytics": build_company_history_analytics(records), "next_actions": ["upload_company_history_excel"] if not records else ["review_history_breakdown", "rerun_project_analysis"]})
             if parsed.path == "/api/courts/profiles":
-                return self._send_json(200, {"ok": True, "profiles": db.list_court_profiles()})
+                records = db.list_company_history_records()
+                profiles = build_court_profiles(records) if records else db.list_court_profiles()
+                return self._send_json(200, {"ok": True, "profiles": profiles})
             match = re.fullmatch(r"/api/courts/profiles/(.+)", parsed.path)
             if match:
                 court_name = unquote(match.group(1))
-                profile = db.get_court_profile(court_name)
+                records = db.list_company_history_records()
+                profiles = build_court_profiles(records) if records else db.list_court_profiles()
+                profile = next((item for item in profiles if item.get("court_name") == court_name), None) or db.get_court_profile(court_name)
                 if not profile:
                     return self._error(404, "court_profile_not_found", "法院画像不存在")
                 return self._send_json(200, {"ok": True, "profile": profile})
+            match = re.fullmatch(r"/api/projects/([^/]+)/calibration/latest", parsed.path)
+            if match:
+                project_id = match.group(1)
+                calibration = db.latest_pricing_calibration(project_id)
+                if not calibration:
+                    return self._error(404, "calibration_not_found", "这个项目还没有历史校准结果，请先生成分析报告。", ["run_analysis"])
+                return self._send_json(200, {"ok": True, "calibration": calibration})
             if parsed.path == "/api/knowledge/notes":
                 query = parse_qs(parsed.query)
                 note_type = (query.get("note_type") or [None])[0]
